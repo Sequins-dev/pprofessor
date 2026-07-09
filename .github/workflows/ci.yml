@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust (fmt, clippy, test)
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Run tests
+        run: cargo test
+
+  swift:
+    name: Swift (build, test, app)
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install dependencies
+        run: brew install xcodegen
+
+      - name: Swift build
+        working-directory: apps/macos
+        run: xcrun swift build
+
+      - name: Swift test
+        working-directory: apps/macos
+        run: xcrun swift test
+
+      - name: Build app with CLI helper
+        run: make build-app
+
+      - name: Verify bundled CLI helper
+        working-directory: apps/macos
+        run: |
+          APP_PATH="$(xcodebuild -scheme PProfessor -configuration Debug -showBuildSettings 2>/dev/null | awk -F'= ' '/ BUILT_PRODUCTS_DIR = / { print $2; exit }')/PProfessor.app"
+          test -x "$APP_PATH/Contents/Helpers/pprofessor"

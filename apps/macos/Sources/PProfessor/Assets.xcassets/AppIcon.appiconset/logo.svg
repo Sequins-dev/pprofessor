@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">pprofessor P flamegraph logo</title>
+  <desc id="desc">The letter P built from layered flamegraph stack frames.</desc>
+  <defs>
+    <clipPath id="p-shape">
+      <path fill-rule="evenodd" d="M152 92h148c68 0 112 46 112 112s-44 112-112 112h-80v102h-68zm68 56v112h66c42 0 70-22 70-56s-28-56-70-56z"/>
+    </clipPath>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="#0f172a"/>
+  <g clip-path="url(#p-shape)" shape-rendering="crispEdges">
+    <rect x="126" y="92" width="192" height="14" fill="#fff7ed"/>
+    <rect x="126" y="106" width="232" height="14" fill="#ffedd5"/>
+    <rect x="126" y="120" width="266" height="14" fill="#f97316"/>
+    <rect x="126" y="134" width="286" height="14" fill="#fb923c"/>
+    <rect x="126" y="148" width="296" height="14" fill="#fdba74"/>
+    <rect x="126" y="162" width="300" height="14" fill="#fb923c"/>
+    <rect x="126" y="176" width="304" height="14" fill="#facc15"/>
+    <rect x="126" y="190" width="306" height="14" fill="#fbbf24"/>
+    <rect x="126" y="204" width="306" height="14" fill="#f59e0b"/>
+    <rect x="126" y="218" width="304" height="14" fill="#f97316"/>
+    <rect x="126" y="232" width="300" height="14" fill="#f59e0b"/>
+    <rect x="126" y="246" width="292" height="14" fill="#5eead4"/>
+    <rect x="126" y="260" width="276" height="14" fill="#2dd4bf"/>
+    <rect x="126" y="274" width="250" height="14" fill="#14b8a6"/>
+    <rect x="126" y="288" width="216" height="14" fill="#0d9488"/>
+    <rect x="126" y="302" width="172" height="14" fill="#0f9f95"/>
+    <rect x="152" y="316" width="68" height="14" fill="#14b8a6"/>
+    <rect x="152" y="330" width="68" height="14" fill="#2dd4bf"/>
+    <rect x="152" y="344" width="68" height="14" fill="#14b8a6"/>
+    <rect x="152" y="358" width="68" height="14" fill="#0d9488"/>
+    <rect x="152" y="372" width="68" height="14" fill="#0d9488"/>
+    <rect x="152" y="386" width="68" height="14" fill="#0f9f95"/>
+    <rect x="152" y="400" width="68" height="18" fill="#14b8a6"/>
+    <rect x="194" y="120" width="124" height="14" fill="#f97316"/>
+    <rect x="194" y="134" width="166" height="14" fill="#fb923c"/>
+    <rect x="194" y="260" width="172" height="14" fill="#14b8a6"/>
+    <rect x="194" y="274" width="140" height="14" fill="#0d9488"/>
+  </g>
+</svg>

@@ -1,0 +1,97 @@
+name: PProfessor
+options:
+  bundleIdPrefix: com.pprofessor
+  deploymentTarget:
+    macOS: "15.0"
+  xcodeVersion: "16.0"
+  generateEmptyDirectories: true
+  groupSortPosition: top
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
+    ENABLE_USER_SCRIPT_SANDBOXING: false
+
+packages:
+  PProfessorKit:
+    path: .
+
+targets:
+  PProfessor:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/PProfessor
+        excludes:
+          - "**/*.xcassets"
+      - path: Sources/PProfessor/Assets.xcassets
+        type: folder
+      - path: ../../target/cli-helper/pprofessor
+        name: pprofessor
+        buildPhase:
+          copyFiles:
+            destination: wrapper
+            subpath: Contents/Helpers
+    resources:
+      - path: Sources/PProfessor/Assets.xcassets
+      - path: Sources/PProfessor/AppIcon.icns
+    dependencies:
+      - package: PProfessorKit
+        product: PProfessorKit
+      - sdk: SwiftUI.framework
+      - sdk: AppKit.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pprofessor.app
+        PRODUCT_NAME: PProfessor
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        COMBINE_HIDPI_IMAGES: true
+        ENABLE_HARDENED_RUNTIME: false
+    info:
+      path: Sources/PProfessor/Info.plist
+      properties:
+        CFBundleDisplayName: PProfessor
+        CFBundleIconFile: AppIcon
+        LSMinimumSystemVersion: "15.0"
+        NSHighResolutionCapable: true
+        NSPrincipalClass: NSApplication
+        LSApplicationCategoryType: public.app-category.developer-tools
+        NSSupportsAutomaticTermination: true
+        NSSupportsSuddenTermination: true
+    entitlements:
+      path: Sources/PProfessor/PProfessor.entitlements
+      properties:
+        com.apple.security.app-sandbox: false
+
+  PProfessorKitTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/PProfessorKitTests
+    dependencies:
+      - package: PProfessorKit
+        product: PProfessorKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pprofessor.tests
+        GENERATE_INFOPLIST_FILE: true
+
+schemes:
+  PProfessor:
+    build:
+      targets:
+        PProfessor: all
+    run:
+      config: Debug
+      executable: PProfessor
+    test:
+      config: Debug
+      targets:
+        - PProfessorKitTests
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

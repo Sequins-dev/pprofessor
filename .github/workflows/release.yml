@@ -1,0 +1,267 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 0.2.0)"
+        required: true
+        type: string
+      dry_run:
+        description: "Dry run: build artifacts but skip commit/tag/release"
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  validate-version:
+    name: Validate version
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-tags: true
+
+      - name: Check semver format
+        run: |
+          VERSION="${{ inputs.version }}"
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9._-]+)?$'; then
+            echo "Error: '$VERSION' is not a valid semver version"
+            exit 1
+          fi
+
+      - name: Check tag does not already exist
+        run: |
+          if git ls-remote --tags origin "refs/tags/v${{ inputs.version }}" | grep -q .; then
+            echo "Error: tag v${{ inputs.version }} already exists"
+            exit 1
+          fi
+
+  build-cli-macos:
+    name: Build CLI (macOS universal)
+    runs-on: macos-15
+    needs: validate-version
+    if: ${{ !failure() && !cancelled() }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Prepare release version
+        run: |
+          sed -i '' 's/^version = "[^"]*"/version = "${{ inputs.version }}"/' Cargo.toml
+          cargo update
+
+      - name: Build universal CLI
+        run: make cli-helper-universal
+
+      - name: Package tarball
+        run: |
+          cp target/cli-helper/pprofessor pprofessor
+          ARCHIVE="pprofessor-${{ inputs.version }}-macos-universal.tar.gz"
+          tar -czf "$ARCHIVE" pprofessor
+          shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: cli-macos
+          path: |
+            pprofessor-${{ inputs.version }}-macos-universal.tar.gz
+            pprofessor-${{ inputs.version }}-macos-universal.tar.gz.sha256
+
+  build-macos-app:
+    name: Build macOS app (signed DMG)
+    runs-on: macos-15
+    needs: validate-version
+    if: ${{ !failure() && !cancelled() }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install dependencies
+        run: brew install xcodegen create-dmg
+
+      - name: Import signing certificate
+        uses: apple-actions/import-codesign-certs@v6
+        with:
+          p12-file-base64: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12 }}
+          p12-password: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
+
+      - name: Prepare release version
+        run: |
+          sed -i '' 's/^version = "[^"]*"/version = "${{ inputs.version }}"/' Cargo.toml
+          cargo update
+
+      - name: Store notarization credentials
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          xcrun notarytool store-credentials "CI_NOTARY" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID"
+
+      - name: Build and sign universal CLI helper
+        run: make sign-cli-helper SIGN_IDENTITY="Developer ID Application"
+
+      - name: Generate Xcode project
+        working-directory: apps/macos
+        run: xcodegen generate
+
+      - name: Archive app
+        working-directory: apps/macos
+        run: |
+          xcodebuild archive \
+            -scheme PProfessor \
+            -configuration Release \
+            -archivePath "$RUNNER_TEMP/PProfessor.xcarchive" \
+            ENABLE_HARDENED_RUNTIME=YES \
+            CODE_SIGN_IDENTITY="Developer ID Application" \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}" \
+            MARKETING_VERSION="${{ inputs.version }}" \
+            CURRENT_PROJECT_VERSION="${{ inputs.version }}"
+
+      - name: Export archive
+        run: |
+          cat > "$RUNNER_TEMP/ExportOptions.plist" << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>developer-id</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>signingCertificate</key>
+            <string>Developer ID Application</string>
+            <key>teamID</key>
+            <string>${{ secrets.APPLE_TEAM_ID }}</string>
+          </dict>
+          </plist>
+          EOF
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/PProfessor.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath "$RUNNER_TEMP/export"
+
+      - name: Notarize app
+        run: |
+          ditto -c -k --keepParent "$RUNNER_TEMP/export/PProfessor.app" "$RUNNER_TEMP/PProfessor-notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/PProfessor-notarize.zip" \
+            --keychain-profile "CI_NOTARY" \
+            --wait
+
+      - name: Staple app
+        run: xcrun stapler staple "$RUNNER_TEMP/export/PProfessor.app"
+
+      - name: Create DMG
+        run: |
+          DMG_NAME="PProfessor-${{ inputs.version }}.dmg"
+          create-dmg \
+            --volname "PProfessor ${{ inputs.version }}" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "PProfessor.app" 175 190 \
+            --hide-extension "PProfessor.app" \
+            --app-drop-link 425 190 \
+            "$DMG_NAME" \
+            "$RUNNER_TEMP/export/PProfessor.app"
+
+      - name: Notarize DMG
+        run: |
+          xcrun notarytool submit "PProfessor-${{ inputs.version }}.dmg" \
+            --keychain-profile "CI_NOTARY" \
+            --wait
+
+      - name: Staple and checksum DMG
+        run: |
+          DMG_NAME="PProfessor-${{ inputs.version }}.dmg"
+          xcrun stapler staple "$DMG_NAME"
+          shasum -a 256 "$DMG_NAME" > "$DMG_NAME.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-app
+          path: |
+            PProfessor-${{ inputs.version }}.dmg
+            PProfessor-${{ inputs.version }}.dmg.sha256
+
+  publish-release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    needs:
+      - build-cli-macos
+      - build-macos-app
+    if: ${{ !inputs.dry_run && !failure() && !cancelled() }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Commit and tag release
+        run: |
+          sed -i 's/^version = "[^"]*"/version = "${{ inputs.version }}"/' Cargo.toml
+          cargo update
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock
+          git commit -m "release: v${{ inputs.version }}"
+          git tag -a "v${{ inputs.version }}" -m "Release v${{ inputs.version }}"
+          git push origin HEAD:main
+          git push origin "v${{ inputs.version }}"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          merge-multiple: true
+
+      - name: Determine prerelease
+        id: prerelease
+        run: |
+          if echo "${{ inputs.version }}" | grep -q '-'; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.version }}
+          name: v${{ inputs.version }}
+          generate_release_notes: true
+          prerelease: ${{ steps.prerelease.outputs.is_prerelease }}
+          files: |
+            pprofessor-${{ inputs.version }}-macos-universal.tar.gz
+            pprofessor-${{ inputs.version }}-macos-universal.tar.gz.sha256
+            PProfessor-${{ inputs.version }}.dmg
+            PProfessor-${{ inputs.version }}.dmg.sha256

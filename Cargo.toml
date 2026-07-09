@@ -1,0 +1,33 @@
+[package]
+name = "pprofessor"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "pprofessor"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pprofessor"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+bytes = "1"
+serde = { version = "1", features = ["derive"] }
+flate2 = "1"
+nix = { version = "0.29", features = ["signal", "process"] }
+object = { version = "0.36", features = ["macho", "read"] }
+addr2line = "0.24"
+gimli = "0.31"
+memmap2 = "0.9"
+symbolic-demangle = "12"
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+mach2 = "0.4"
+
+[dev-dependencies]
+flate2 = "1"
+libc = "0.2"

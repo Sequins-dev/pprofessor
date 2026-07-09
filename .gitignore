@@ -1,0 +1,15 @@
+.build/
+*.xcodeproj
+*.xcworkspace
+.DS_Store
+target/
+profile.pb.gz
+profile.pb
+profile.pb.html
+profile.pb.md
+*.dmg
+*.tar.gz
+*.sha256
+apps/macos/.build/
+apps/macos/*.xcodeproj
+apps/macos/*.xcworkspace
