@@ -140,17 +140,41 @@ impl Line {
 
 pub struct Location {
     pub id: u64,
+    pub mapping_id: u64,
+    pub address: u64,
     pub lines: Vec<Line>,
 }
 
 impl Location {
     fn encode(&self, buf: &mut Vec<u8>) {
         encode_varint_field(buf, 1, self.id);
+        encode_varint_field(buf, 2, self.mapping_id);
+        encode_varint_field(buf, 3, self.address);
         for line in &self.lines {
             let mut inner = Vec::new();
             line.encode(&mut inner);
             encode_length_delimited(buf, 4, &inner);
         }
+    }
+}
+
+pub struct Mapping {
+    pub id: u64,
+    pub memory_start: u64,
+    pub memory_limit: u64,
+    pub file_offset: u64,
+    pub filename: u64,
+    pub build_id: u64,
+}
+
+impl Mapping {
+    fn encode(&self, buf: &mut Vec<u8>) {
+        encode_varint_field(buf, 1, self.id);
+        encode_varint_field(buf, 2, self.memory_start);
+        encode_varint_field(buf, 3, self.memory_limit);
+        encode_varint_field(buf, 4, self.file_offset);
+        encode_varint_field(buf, 5, self.filename);
+        encode_varint_field(buf, 6, self.build_id);
     }
 }
 
@@ -222,6 +246,7 @@ pub struct ProfileEncoder {
     pub strings: StringTable,
     pub value_types: Vec<ValueType>,
     pub samples: Vec<Sample>,
+    pub mappings: Vec<Mapping>,
     pub locations: Vec<Location>,
     pub functions: Vec<Function>,
     pub time_nanos: i64,
@@ -242,6 +267,7 @@ impl ProfileEncoder {
             strings: StringTable::new(),
             value_types: Vec::new(),
             samples: Vec::new(),
+            mappings: Vec::new(),
             locations: Vec::new(),
             functions: Vec::new(),
             time_nanos: 0,
@@ -266,6 +292,13 @@ impl ProfileEncoder {
             let mut inner = Vec::new();
             s.encode(&mut inner);
             encode_length_delimited(&mut buf, 2, &inner);
+        }
+
+        // field 3: mapping (repeated Mapping)
+        for mapping in &self.mappings {
+            let mut inner = Vec::new();
+            mapping.encode(&mut inner);
+            encode_length_delimited(&mut buf, 3, &inner);
         }
 
         // field 4: location (repeated Location)
@@ -346,5 +379,30 @@ mod tests {
         assert!(!buf.is_empty());
         // First byte should be a valid protobuf tag (field 1, wire type 2 = 0x0a)
         assert_eq!(buf[0], 0x0a);
+    }
+
+    #[test]
+    fn test_encodes_mapping_and_location_identity() {
+        let mut enc = ProfileEncoder::new();
+        let filename = enc.strings.intern("/tmp/example");
+        let build_id = enc.strings.intern("ABCDEF");
+        enc.mappings.push(Mapping {
+            id: 7,
+            memory_start: 0x1000,
+            memory_limit: 0x2000,
+            file_offset: 0,
+            filename,
+            build_id,
+        });
+        enc.locations.push(Location {
+            id: 9,
+            mapping_id: 7,
+            address: 0x1234,
+            lines: Vec::new(),
+        });
+
+        let bytes = enc.encode();
+        assert!(bytes.windows(2).any(|window| window == [0x10, 0x07]));
+        assert!(bytes.windows(3).any(|window| window == [0x18, 0xb4, 0x24]));
     }
 }

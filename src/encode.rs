@@ -5,7 +5,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use bytes::Bytes;
 
-use crate::pprof::{Function, Label, Line, Location, ProfileEncoder, Sample, ValueType};
+use crate::pprof::{Function, Label, Line, Location, Mapping, ProfileEncoder, Sample, ValueType};
 use crate::symbolicated::SymbolicatedProfile;
 
 pub fn build_proto(profile: &SymbolicatedProfile) -> Bytes {
@@ -38,6 +38,29 @@ pub fn build_proto(profile: &SymbolicatedProfile) -> Bytes {
         .unwrap_or(Duration::ZERO)
         .as_nanos() as i64;
 
+    let mut images = profile.images.clone();
+    images.sort_by_key(|image| image.load_address);
+    for (index, image) in images.iter().enumerate() {
+        let filename = enc.strings.intern(&image.path);
+        let memory_limit = images
+            .get(index + 1)
+            .map(|next| next.load_address)
+            .or_else(|| {
+                std::fs::metadata(&image.path)
+                    .ok()
+                    .map(|metadata| image.load_address.saturating_add(metadata.len()))
+            })
+            .unwrap_or(image.load_address.saturating_add(1));
+        enc.mappings.push(Mapping {
+            id: index as u64 + 1,
+            memory_start: image.load_address,
+            memory_limit,
+            file_offset: 0,
+            filename,
+            build_id: 0,
+        });
+    }
+
     // Deduplicate functions and locations by address.
     let mut func_id_map: HashMap<u64, u64> = HashMap::new(); // addr -> function_id
     let mut loc_id_map: HashMap<u64, u64> = HashMap::new(); // addr -> location_id
@@ -68,6 +91,8 @@ pub fn build_proto(profile: &SymbolicatedProfile) -> Bytes {
                 let lid = enc.locations.len() as u64 + 1;
                 enc.locations.push(Location {
                     id: lid,
+                    mapping_id: images.partition_point(|image| image.load_address <= addr) as u64,
+                    address: addr,
                     lines: vec![Line {
                         function_id: func_id,
                         line: frame.line as i64,
@@ -148,6 +173,7 @@ mod tests {
         threads.insert(1u64, "main".to_string());
 
         SymbolicatedProfile {
+            images: Vec::new(),
             frames,
             threads,
             samples: vec![Sample {

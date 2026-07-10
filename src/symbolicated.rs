@@ -40,6 +40,8 @@ pub enum Unresolved {
 /// A fully symbolicated CPU profile ready for inspection or serialization.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SymbolicatedProfile {
+    /// Native images captured from the target for stable pprof mappings.
+    pub images: Vec<crate::LoadedImage>,
     /// Frame pool keyed by address. Each unique address appears at most once.
     /// Addresses absent from this map were skipped by the symbolizer.
     #[serde(with = "frame_map_serde")]
@@ -103,6 +105,7 @@ impl SymbolicatedProfile {
         start_wall: SystemTime,
     ) -> Self {
         let duration = raw.end_time.duration_since(raw.start_time);
+        let images = raw.images.clone();
         let threads: HashMap<u64, String> = raw.thread_names.clone();
 
         // Collect all unique addresses across all stacks.
@@ -169,6 +172,7 @@ impl SymbolicatedProfile {
             .collect();
 
         SymbolicatedProfile {
+            images,
             frames,
             threads,
             samples,

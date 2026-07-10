@@ -6,6 +6,7 @@ import Foundation
 public struct DecodedProfile: Sendable {
     public var sampleTypes: [ValueType] = []
     public var samples: [ProfSample] = []
+    public var mappings: [ProfMapping] = []
     public var locations: [ProfLocation] = []
     public var functions: [ProfFunction] = []
     public var stringTable: [String] = []
@@ -25,6 +26,8 @@ public struct DecodedProfile: Sendable {
                 profile.sampleTypes.append(ValueType.decode(from: value))
             case 2 where wireType == .lengthDelimited:
                 profile.samples.append(ProfSample.decode(from: value))
+            case 3 where wireType == .lengthDelimited:
+                profile.mappings.append(ProfMapping.decode(from: value))
             case 4 where wireType == .lengthDelimited:
                 profile.locations.append(ProfLocation.decode(from: value))
             case 5 where wireType == .lengthDelimited:
@@ -96,19 +99,42 @@ extension ProfLine {
 extension ProfLocation {
     static func decode(from data: Data) -> ProfLocation {
         var id: UInt64 = 0
+        var mappingID: UInt64 = 0
+        var address: UInt64 = 0
         var lines: [ProfLine] = []
         decodeProtobuf(from: data) { field, wireType, value in
             switch field {
             case 1 where wireType == .varint:
                 let (v, _) = decodeVarint(from: value, at: 0)
                 id = v
+            case 2 where wireType == .varint:
+                let (v, _) = decodeVarint(from: value, at: 0)
+                mappingID = v
+            case 3 where wireType == .varint:
+                let (v, _) = decodeVarint(from: value, at: 0)
+                address = v
             case 4 where wireType == .lengthDelimited:
                 lines.append(ProfLine.decode(from: value))
             default:
                 break
             }
         }
-        return ProfLocation(id: id, lines: lines)
+        return ProfLocation(id: id, mappingID: mappingID, address: address, lines: lines)
+    }
+}
+
+extension ProfMapping {
+    static func decode(from data: Data) -> ProfMapping {
+        var values = [UInt64](repeating: 0, count: 6)
+        decodeProtobuf(from: data) { field, wireType, value in
+            guard wireType == .varint, (1...6).contains(field) else { return }
+            let (decoded, _) = decodeVarint(from: value, at: 0)
+            values[Int(field - 1)] = decoded
+        }
+        return ProfMapping(
+            id: values[0], memoryStart: values[1], memoryLimit: values[2],
+            fileOffset: values[3], filename: values[4], buildID: values[5]
+        )
     }
 }
 

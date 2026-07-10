@@ -1,10 +1,21 @@
 import AppKit
 import SwiftUI
 import PProfessorKit
+import SwiftData
 
 @main
 struct PProfessorApp: App {
+    private let modelContainer: ModelContainer
+    private let coordinator: SessionCoordinator
+
     init() {
+        do {
+            let container = try ModelContainer(for: ProfileSession.self)
+            modelContainer = container
+            coordinator = SessionCoordinator(container: container)
+        } catch {
+            fatalError("Unable to initialize profile session storage: \(error)")
+        }
         if let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
            let icon = NSImage(contentsOf: iconURL) {
             NSApplication.shared.applicationIconImage = icon
@@ -13,8 +24,10 @@ struct PProfessorApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(coordinator: coordinator)
         }
+        .windowToolbarStyle(.unifiedCompact(showsTitle: false))
+        .modelContainer(modelContainer)
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandMenu("Tools") {

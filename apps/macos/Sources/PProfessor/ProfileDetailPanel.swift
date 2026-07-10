@@ -16,7 +16,6 @@ struct ProfileDetailPanel: View {
         }
         .padding()
         .background(Color(NSColor.controlBackgroundColor))
-        .frame(height: 400)
     }
 
     private var headerSection: some View {
@@ -69,7 +68,7 @@ struct ProfileDetailPanel: View {
                     }
                 }
             }
-            .frame(maxHeight: 300)
+            .frame(maxHeight: .infinity)
         }
     }
 

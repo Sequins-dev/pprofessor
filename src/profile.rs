@@ -1,6 +1,6 @@
 use std::collections::HashSet;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::SystemTime;
 
@@ -18,6 +18,7 @@ use crate::symbolicated::{SymbolicatedProfile, Unresolved};
 pub struct Profile {
     pub(crate) stop: Arc<AtomicBool>,
     pub(crate) thread: Option<JoinHandle<Result<RawProfile>>>,
+    pub(crate) live: Arc<Mutex<RawProfile>>,
     freq_hz: u32,
     start_wall: SystemTime,
     symbolizer: Option<Box<dyn Symbolizer>>,
@@ -28,6 +29,7 @@ impl Profile {
     pub(crate) fn new(
         stop: Arc<AtomicBool>,
         thread: JoinHandle<Result<RawProfile>>,
+        live: Arc<Mutex<RawProfile>>,
         freq_hz: u32,
         start_wall: SystemTime,
         symbolizer: Option<Box<dyn Symbolizer>>,
@@ -36,11 +38,17 @@ impl Profile {
         Profile {
             stop,
             thread: Some(thread),
+            live,
             freq_hz,
             start_wall,
             symbolizer,
             unresolved,
         }
+    }
+
+    /// Return a cumulative raw snapshot without stopping the active session.
+    pub fn snapshot_raw(&self) -> RawProfile {
+        self.live.lock().unwrap().clone()
     }
 
     /// Signal the background sampler to stop. Non-blocking.

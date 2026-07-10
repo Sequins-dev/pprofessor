@@ -37,9 +37,14 @@ make cli-helper-universal
 ```sh
 pprofessor run --output profile.pb.gz ./my-app
 sudo pprofessor attach --output profile.pb.gz 12345
+pprofessor processes
 ```
 
 The CLI uses macOS `task_for_pid`, so profiling another process requires root or a trusted signature with the debugger entitlement.
+
+When PProfessor.app is open, CLI `run` and `attach` sessions are discovered automatically and stream continuously symbolized pprof deltas to the app over a per-user Unix socket. The final gzip profile is retained by the app alongside its session metadata. Pass `--no-publish` to keep a capture CLI-only.
+
+The app's Attach button lists live processes owned by the current user. Live, completed, imported, failed, and interrupted captures remain in the Sessions sidebar until explicitly deleted.
 
 ## App CLI Installation
 

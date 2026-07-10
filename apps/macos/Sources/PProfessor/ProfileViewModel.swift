@@ -16,6 +16,7 @@ final class ProfileViewModel {
     private(set) var error: String?
     private(set) var availableValueTypes: [(type: String, unit: String)] = []
     private(set) var availableThreads: [String] = []
+    private(set) var sourceURL: URL?
 
     // MARK: - UI state
 
@@ -37,6 +38,20 @@ final class ProfileViewModel {
     // MARK: - Private
 
     private var decodedProfile: DecodedProfile?
+
+    func loadDecodedProfile(_ profile: DecodedProfile) {
+        error = nil
+        isLoading = false
+        decodedProfile = profile
+        sourceURL = nil
+        availableValueTypes = profile.sampleTypes.map { vt in
+            (type: profile.string(at: vt.type), unit: profile.string(at: vt.unit))
+        }
+        if !availableValueTypes.indices.contains(selectedValueTypeIndex) {
+            selectedValueTypeIndex = 0
+        }
+        recompute(profile: profile)
+    }
 
     // MARK: - File loading
 
@@ -65,6 +80,7 @@ final class ProfileViewModel {
             }.value
 
             decodedProfile = profile
+            sourceURL = url
             availableValueTypes = profile.sampleTypes.map { vt in
                 (type: profile.string(at: vt.type), unit: profile.string(at: vt.unit))
             }
@@ -76,6 +92,23 @@ final class ProfileViewModel {
         }
 
         isLoading = false
+    }
+
+    func saveProfile() {
+        guard let sourceURL else { return }
+        let panel = NSSavePanel()
+        panel.title = "Save Profile"
+        panel.nameFieldStringValue = sourceURL.lastPathComponent
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        do {
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.removeItem(at: destination)
+            }
+            try FileManager.default.copyItem(at: sourceURL, to: destination)
+        } catch {
+            self.error = error.localizedDescription
+        }
     }
 
     // MARK: - Node lookup

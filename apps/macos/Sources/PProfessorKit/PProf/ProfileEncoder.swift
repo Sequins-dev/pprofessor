@@ -32,20 +32,60 @@ public struct ProfLine: Sendable {
 
 public struct ProfLocation: Sendable {
     public var id: UInt64
+    public var mappingID: UInt64
+    public var address: UInt64
     public var lines: [ProfLine]
 
     public init(id: UInt64, lines: [ProfLine]) {
         self.id = id
+        self.mappingID = 0
+        self.address = 0
+        self.lines = lines
+    }
+
+    public init(id: UInt64, mappingID: UInt64, address: UInt64, lines: [ProfLine]) {
+        self.id = id
+        self.mappingID = mappingID
+        self.address = address
         self.lines = lines
     }
 
     func encode(into buf: inout Data) {
         encodeVarintField(field: 1, value: id, into: &buf)
+        encodeVarintField(field: 2, value: mappingID, into: &buf)
+        encodeVarintField(field: 3, value: address, into: &buf)
         for line in lines {
             var inner = Data()
             line.encode(into: &inner)
             encodeLengthDelimited(field: 4, data: inner, into: &buf)
         }
+    }
+}
+
+public struct ProfMapping: Sendable {
+    public var id: UInt64
+    public var memoryStart: UInt64
+    public var memoryLimit: UInt64
+    public var fileOffset: UInt64
+    public var filename: UInt64
+    public var buildID: UInt64
+
+    public init(id: UInt64, memoryStart: UInt64, memoryLimit: UInt64, fileOffset: UInt64, filename: UInt64, buildID: UInt64) {
+        self.id = id
+        self.memoryStart = memoryStart
+        self.memoryLimit = memoryLimit
+        self.fileOffset = fileOffset
+        self.filename = filename
+        self.buildID = buildID
+    }
+
+    func encode(into buf: inout Data) {
+        encodeVarintField(field: 1, value: id, into: &buf)
+        encodeVarintField(field: 2, value: memoryStart, into: &buf)
+        encodeVarintField(field: 3, value: memoryLimit, into: &buf)
+        encodeVarintField(field: 4, value: fileOffset, into: &buf)
+        encodeVarintField(field: 5, value: filename, into: &buf)
+        encodeVarintField(field: 6, value: buildID, into: &buf)
     }
 }
 
@@ -120,6 +160,7 @@ public struct ProfileEncoder {
     public var strings: StringTable
     public var valueTypes: [ValueType]
     public var samples: [ProfSample]
+    public var mappings: [ProfMapping]
     public var locations: [ProfLocation]
     public var functions: [ProfFunction]
     public var timeNanos: Int64
@@ -131,6 +172,7 @@ public struct ProfileEncoder {
         strings = StringTable()
         valueTypes = []
         samples = []
+        mappings = []
         locations = []
         functions = []
         timeNanos = 0
@@ -149,6 +191,10 @@ public struct ProfileEncoder {
         for s in samples {
             var inner = Data(); s.encode(into: &inner)
             encodeLengthDelimited(field: 2, data: inner, into: &buf)
+        }
+        for mapping in mappings {
+            var inner = Data(); mapping.encode(into: &inner)
+            encodeLengthDelimited(field: 3, data: inner, into: &buf)
         }
         for loc in locations {
             var inner = Data(); loc.encode(into: &inner)
