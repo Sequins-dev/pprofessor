@@ -18,6 +18,8 @@ pub fn build_proto(profile: &SymbolicatedProfile) -> Bytes {
     let s_nanoseconds = enc.strings.intern("nanoseconds");
     let s_thread_id = enc.strings.intern("thread_id");
     let s_thread_name = enc.strings.intern("thread_name");
+    let s_timestamp = enc.strings.intern("pprofessor::timestamp");
+    let s_nanoseconds_label = enc.strings.intern("nanoseconds");
 
     enc.value_types.push(ValueType {
         r#type: s_samples,
@@ -131,6 +133,15 @@ pub fn build_proto(profile: &SymbolicatedProfile) -> Bytes {
             });
         }
 
+        if let Some(timestamp_nanos) = sample.timestamp_nanos {
+            labels.push(Label {
+                key: s_timestamp,
+                str_index: 0,
+                num: timestamp_nanos.min(i64::MAX as u64) as i64,
+                num_unit: s_nanoseconds_label,
+            });
+        }
+
         enc.samples.push(Sample {
             location_ids,
             values: vec![sample.count as i64],
@@ -180,6 +191,7 @@ mod tests {
                 thread_id: 1,
                 stack: vec![0x1000, 0x2000],
                 count: 5,
+                timestamp_nanos: Some(123_456_789),
             }],
             start_time: SystemTime::now(),
             duration: Duration::from_secs(1),
@@ -194,5 +206,20 @@ mod tests {
         assert!(!proto.is_empty());
         // First byte should be field 1, wire type 2 (0x0a) — sample_type
         assert_eq!(proto[0], 0x0a);
+    }
+
+    #[test]
+    fn test_build_proto_includes_timestamp_label() {
+        let proto = build_proto(&dummy_profile());
+        assert!(
+            proto
+                .windows(b"pprofessor::timestamp".len())
+                .any(|window| window == b"pprofessor::timestamp")
+        );
+        assert!(
+            proto
+                .windows(b"nanoseconds".len())
+                .any(|window| window == b"nanoseconds")
+        );
     }
 }

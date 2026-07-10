@@ -17,6 +17,8 @@ final class ProfileViewModel {
     private(set) var availableValueTypes: [(type: String, unit: String)] = []
     private(set) var availableThreads: [String] = []
     private(set) var sourceURL: URL?
+    private(set) var timeline: ProfileTimeline?
+    private(set) var timelineSelection: TimelineSelectionState?
 
     // MARK: - UI state
 
@@ -24,12 +26,14 @@ final class ProfileViewModel {
     var selectedValueTypeIndex: Int = 0 {
         didSet {
             guard let profile = decodedProfile else { return }
+            rebuildTimeline(profile: profile)
             recompute(profile: profile)
         }
     }
     var selectedThread: String? = nil {
         didSet {
             guard let profile = decodedProfile else { return }
+            rebuildTimeline(profile: profile)
             recompute(profile: profile)
         }
     }
@@ -38,8 +42,12 @@ final class ProfileViewModel {
     // MARK: - Private
 
     private var decodedProfile: DecodedProfile?
+    private var rangeThrottleTask: Task<Void, Never>?
+    private var rangeConversionTask: Task<Void, Never>?
+    private var pendingRangeProfile: DecodedProfile?
+    private var recomputeGeneration = 0
 
-    func loadDecodedProfile(_ profile: DecodedProfile) {
+    func loadDecodedProfile(_ profile: DecodedProfile, resetTimelineSelection: Bool = false) {
         error = nil
         isLoading = false
         decodedProfile = profile
@@ -50,7 +58,25 @@ final class ProfileViewModel {
         if !availableValueTypes.indices.contains(selectedValueTypeIndex) {
             selectedValueTypeIndex = 0
         }
+        rebuildTimeline(profile: profile, resetSelection: resetTimelineSelection)
         recompute(profile: profile)
+    }
+
+    func selectTimeRange(_ range: ClosedRange<Int64>, isDragging: Bool) {
+        guard var selection = timelineSelection, let profile = decodedProfile else { return }
+        selection.select(range)
+        timelineSelection = selection
+        scheduleRecompute(profile: profile, delayNanos: isDragging ? 100_000_000 : 0)
+    }
+
+    func resetTimeRange() {
+        guard var selection = timelineSelection,
+              let duration = timeline?.durationNanos,
+              let profile = decodedProfile
+        else { return }
+        selection.reset(durationNanos: duration)
+        timelineSelection = selection
+        scheduleRecompute(profile: profile, delayNanos: 0)
     }
 
     // MARK: - File loading
@@ -63,6 +89,8 @@ final class ProfileViewModel {
         rootNodeId = nil
         decodedProfile = nil
         availableValueTypes = []
+        timeline = nil
+        timelineSelection = nil
 
         do {
             let rawData = try await Task.detached(priority: .userInitiated) {
@@ -86,6 +114,7 @@ final class ProfileViewModel {
             }
             selectedValueTypeIndex = 0
             selectedThread = nil
+            rebuildTimeline(profile: profile, resetSelection: true)
             recompute(profile: profile)
         } catch {
             self.error = error.localizedDescription
@@ -168,7 +197,72 @@ final class ProfileViewModel {
     // MARK: - Private
 
     private func recompute(profile: DecodedProfile) {
-        let result = convertProfile(profile, valueTypeIndex: selectedValueTypeIndex, threadFilter: selectedThread)
+        let result = convertProfile(
+            profile,
+            valueTypeIndex: selectedValueTypeIndex,
+            threadFilter: selectedThread,
+            timeRangeNanos: timelineSelection?.range
+        )
+        apply(result)
+    }
+
+    private func rebuildTimeline(profile: DecodedProfile, resetSelection: Bool = false) {
+        timeline = ProfileTimeline.build(
+            from: profile,
+            valueTypeIndex: selectedValueTypeIndex,
+            threadFilter: selectedThread,
+            bucketCount: 512
+        )
+        guard let timeline else {
+            timelineSelection = nil
+            return
+        }
+        if resetSelection || timelineSelection == nil {
+            timelineSelection = TimelineSelectionState(durationNanos: timeline.durationNanos)
+        } else {
+            timelineSelection?.updateDuration(timeline.durationNanos)
+        }
+    }
+
+    private func scheduleRecompute(profile: DecodedProfile, delayNanos: UInt64) {
+        recomputeGeneration += 1
+        pendingRangeProfile = profile
+        if delayNanos == 0 {
+            rangeThrottleTask?.cancel()
+            rangeThrottleTask = nil
+            launchRangeRecompute(profile: profile, generation: recomputeGeneration)
+            return
+        }
+        guard rangeThrottleTask == nil else { return }
+        rangeThrottleTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: delayNanos)
+            guard !Task.isCancelled, let self, let latestProfile = self.pendingRangeProfile else { return }
+            self.rangeThrottleTask = nil
+            self.launchRangeRecompute(profile: latestProfile, generation: self.recomputeGeneration)
+        }
+    }
+
+    private func launchRangeRecompute(profile: DecodedProfile, generation: Int) {
+        rangeConversionTask?.cancel()
+        let valueTypeIndex = selectedValueTypeIndex
+        let threadFilter = selectedThread
+        let timeRange = timelineSelection?.range
+
+        rangeConversionTask = Task { [weak self] in
+            let result = await Task.detached(priority: .userInitiated) {
+                convertProfile(
+                    profile,
+                    valueTypeIndex: valueTypeIndex,
+                    threadFilter: threadFilter,
+                    timeRangeNanos: timeRange
+                )
+            }.value
+            guard !Task.isCancelled, self?.recomputeGeneration == generation else { return }
+            self?.apply(result)
+        }
+    }
+
+    private func apply(_ result: ProfileConversionResult) {
         nodes = result.nodes
         nodeIndex = result.nodeIndex
         rootNodeId = result.rootNodeId

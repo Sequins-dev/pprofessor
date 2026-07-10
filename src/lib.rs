@@ -16,7 +16,7 @@ pub use pprof::ProfileEncoder;
 #[cfg(target_os = "macos")]
 pub use processes::{ProcessInfo, list_processes, required_helper_arch};
 pub use profile::Profile;
-pub use sampler::{LoadedImage, RawProfile, RawProfileCursor, ThreadFilter};
+pub use sampler::{LoadedImage, RawProfile, RawProfileCursor, RawSampleSeries, ThreadFilter};
 pub use stream::{
     FrameKind, STREAM_HEADER_LEN, SessionHello, SessionPublisher, StreamHeader, StreamProtocolError,
 };

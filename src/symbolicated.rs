@@ -71,6 +71,9 @@ pub struct Sample {
     pub stack: Vec<u64>,
     /// Number of times this exact stack was observed on this thread.
     pub count: u64,
+    /// Monotonic elapsed time from profile start, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp_nanos: Option<u64>,
 }
 
 /// A single frame in a call stack.
@@ -155,19 +158,32 @@ impl SymbolicatedProfile {
         let samples: Vec<Sample> = raw
             .stacks
             .into_iter()
-            .filter_map(|((thread_id, stack_addrs), count)| {
+            .flat_map(|((thread_id, stack_addrs), series)| {
                 let stack: Vec<u64> = stack_addrs
                     .into_iter()
                     .filter(|addr| !skip_set.contains(addr))
                     .collect();
                 if stack.is_empty() {
-                    return None;
+                    return Vec::new();
                 }
-                Some(Sample {
-                    thread_id,
-                    stack,
-                    count,
-                })
+                if let Some(timestamps) = series.timestamps_nanos {
+                    timestamps
+                        .into_iter()
+                        .map(|timestamp_nanos| Sample {
+                            thread_id,
+                            stack: stack.clone(),
+                            count: 1,
+                            timestamp_nanos: Some(timestamp_nanos),
+                        })
+                        .collect()
+                } else {
+                    vec![Sample {
+                        thread_id,
+                        stack,
+                        count: series.count,
+                        timestamp_nanos: None,
+                    }]
+                }
             })
             .collect();
 
