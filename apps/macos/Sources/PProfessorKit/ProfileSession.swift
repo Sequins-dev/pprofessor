@@ -1,5 +1,5 @@
 import Foundation
-import SwiftData
+@preconcurrency import SwiftData
 
 public enum ProfileSessionSource: String, Codable, Sendable {
     case appAttach

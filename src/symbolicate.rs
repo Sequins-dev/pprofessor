@@ -462,7 +462,7 @@ mod tests {
             .find(|symbol| symbol.name().is_ok_and(|name| name == "start"))
             .expect("native dyld slice should contain start");
         let load_address = 0x10_0000_0000;
-        let runtime_address = load_address + start.address() - text_vmaddr + 6992;
+        let runtime_address = load_address + start.address() - text_vmaddr;
 
         let symbolizer = NativeSymbolizer::new(
             vec![LoadedImage {
