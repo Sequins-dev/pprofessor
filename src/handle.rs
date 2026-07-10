@@ -7,7 +7,7 @@ use anyhow::Result;
 
 use crate::process_exists;
 use crate::profile::Profile;
-use crate::sampler::PlatformSampler;
+use crate::sampler::{PlatformSampler, RawProfile};
 use crate::symbolicate::Symbolizer;
 use crate::symbolicated::Unresolved;
 
@@ -122,6 +122,13 @@ impl ProfilerHandle {
         let freq_hz = self.freq_hz;
         let start_wall = SystemTime::now();
         let deadline = self.duration.map(|d| Instant::now() + d);
+        let live = Arc::new(Mutex::new(RawProfile {
+            stacks: Default::default(),
+            thread_names: Default::default(),
+            start_time: Instant::now(),
+            end_time: Instant::now(),
+            images: self.sampler.read_loaded_images().unwrap_or_default(),
+        }));
 
         let check: Option<Box<dyn FnMut() -> bool + Send>> = match &self.inner {
             HandleInner::Spawn { child } => {
@@ -138,14 +145,16 @@ impl ProfilerHandle {
         };
 
         let stop_clone = Arc::clone(&stop);
-        let thread =
-            std::thread::spawn(move || sampler.run_sampling_loop(stop_clone, check, deadline));
+        let live_clone = Arc::clone(&live);
+        let thread = std::thread::spawn(move || {
+            sampler.run_sampling_loop(stop_clone, check, deadline, live_clone)
+        });
 
         let symbolizer = self.symbolizer.take();
         let unresolved = self.unresolved;
 
         Ok(Profile::new(
-            stop, thread, freq_hz, start_wall, symbolizer, unresolved,
+            stop, thread, live, freq_hz, start_wall, symbolizer, unresolved,
         ))
     }
 }

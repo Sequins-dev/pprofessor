@@ -47,7 +47,7 @@ targets:
         PRODUCT_NAME: PProfessor
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         COMBINE_HIDPI_IMAGES: true
-        ENABLE_HARDENED_RUNTIME: false
+        ENABLE_HARDENED_RUNTIME: true
     info:
       path: Sources/PProfessor/Info.plist
       properties:

@@ -20,10 +20,9 @@
 //! 4. Accumulate stacks keyed by their instruction-pointer sequence.
 //! 5. At shutdown, read the target's dyld image list for symbolication.
 
-use std::collections::HashMap;
 use std::os::unix::process::CommandExt;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -184,12 +183,16 @@ struct TaskDyldInfo {
     _pad: i32,
 }
 
-// Matches struct dyld_all_image_infos (simplified; we only need the first few fields).
+// Matches the prefix of struct dyld_all_image_infos through its version 2 fields.
 #[repr(C)]
 struct DyldAllImageInfos {
     version: u32,
     info_array_count: u32,
     info_array: u64, // pointer to array of dyld_image_info in the target
+    notification: u64,
+    process_detached_from_shared_region: u8,
+    lib_system_initialized: u8,
+    dyld_image_load_address: u64,
 }
 
 // Matches struct dyld_image_info.
@@ -560,11 +563,11 @@ impl MacosSampler {
         stop: Arc<AtomicBool>,
         mut check_child_exit: Option<Box<dyn FnMut() -> bool + Send>>,
         deadline: Option<Instant>,
+        live: Arc<Mutex<RawProfile>>,
     ) -> Result<RawProfile> {
         let interval = Duration::from_micros(1_000_000 / self.freq_hz as u64);
-        let mut stacks: HashMap<(u64, Vec<u64>), u64> = HashMap::new();
-        let mut thread_names: HashMap<u64, String> = HashMap::new();
-        let start_time = Instant::now();
+        let start_time = live.lock().unwrap().start_time;
+        let mut next_image_refresh = Instant::now();
 
         // When profiling the current process, capture and skip the sampler's own
         // thread to prevent it from suspending itself (deadlock).
@@ -589,13 +592,31 @@ impl MacosSampler {
                 break;
             }
 
-            for sample in self.sample_once(skip_thread) {
-                if !sample.stack.is_empty() {
-                    *stacks.entry((sample.thread_id, sample.stack)).or_insert(0) += 1;
-                    if !sample.thread_name.is_empty() {
-                        thread_names.insert(sample.thread_id, sample.thread_name);
+            if Instant::now() >= next_image_refresh {
+                let refreshed = self.read_loaded_images().unwrap_or_default();
+                let mut current = live.lock().unwrap();
+                current.images =
+                    prefer_loaded_images(std::mem::take(&mut current.images), refreshed);
+                next_image_refresh = Instant::now() + Duration::from_millis(500);
+            }
+
+            let round = self.sample_once(skip_thread);
+            {
+                let mut current = live.lock().unwrap();
+                for sample in round {
+                    if !sample.stack.is_empty() {
+                        *current
+                            .stacks
+                            .entry((sample.thread_id, sample.stack))
+                            .or_insert(0) += 1;
+                        if !sample.thread_name.is_empty() {
+                            current
+                                .thread_names
+                                .insert(sample.thread_id, sample.thread_name);
+                        }
                     }
                 }
+                current.end_time = Instant::now();
             }
 
             std::thread::sleep(interval);
@@ -613,14 +634,12 @@ impl MacosSampler {
         }
 
         let images = self.read_loaded_images().unwrap_or_default();
-
-        Ok(RawProfile {
-            stacks,
-            thread_names,
-            start_time,
-            end_time,
-            images,
-        })
+        let mut current = live.lock().unwrap();
+        current.start_time = start_time;
+        current.end_time = end_time;
+        current.images = prefer_loaded_images(std::mem::take(&mut current.images), images);
+        let result = current.clone();
+        Ok(result)
     }
 
     /// Read the list of images loaded in the target process via dyld's all_image_infos.
@@ -653,6 +672,10 @@ impl MacosSampler {
             version: 0,
             info_array_count: 0,
             info_array: 0,
+            notification: 0,
+            process_detached_from_shared_region: 0,
+            lib_system_initialized: 0,
+            dyld_image_load_address: 0,
         };
         read_target_mem(self.task, info_addr, unsafe {
             std::slice::from_raw_parts_mut(
@@ -664,15 +687,14 @@ impl MacosSampler {
 
         let count = all_infos.info_array_count as usize;
         let array_addr = all_infos.info_array;
-        if count == 0 || array_addr == 0 {
-            return Ok(Vec::new());
-        }
-
         // Read the image info array.
         let entry_size = std::mem::size_of::<DyldImageInfo>();
         let mut images = Vec::with_capacity(count);
 
         for i in 0..count {
+            if array_addr == 0 {
+                break;
+            }
             let addr = array_addr + (i * entry_size) as u64;
             let mut entry = DyldImageInfo {
                 image_load_address: 0,
@@ -704,7 +726,39 @@ impl MacosSampler {
             }
         }
 
+        append_dyld_loader_image(
+            &mut images,
+            all_infos.version,
+            all_infos.dyld_image_load_address,
+        );
+
         Ok(images)
+    }
+}
+
+fn append_dyld_loader_image(images: &mut Vec<LoadedImage>, version: u32, load_address: u64) {
+    if version < 2
+        || load_address == 0
+        || images
+            .iter()
+            .any(|image| image.load_address == load_address)
+    {
+        return;
+    }
+    images.push(LoadedImage {
+        load_address,
+        path: "/usr/lib/dyld".to_string(),
+    });
+}
+
+fn prefer_loaded_images(
+    existing: Vec<LoadedImage>,
+    refreshed: Vec<LoadedImage>,
+) -> Vec<LoadedImage> {
+    if refreshed.is_empty() {
+        existing
+    } else {
+        refreshed
     }
 }
 
@@ -719,6 +773,47 @@ impl Drop for MacosSampler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_empty_image_refresh_preserves_last_observed_images() {
+        let existing = vec![LoadedImage {
+            load_address: 0x1000,
+            path: "/tmp/target".to_string(),
+        }];
+
+        let preserved = prefer_loaded_images(existing.clone(), Vec::new());
+        assert_eq!(preserved.len(), 1);
+        assert_eq!(preserved[0].path, "/tmp/target");
+
+        let replacement = vec![LoadedImage {
+            load_address: 0x2000,
+            path: "/tmp/new-target".to_string(),
+        }];
+        let refreshed = prefer_loaded_images(existing, replacement);
+        assert_eq!(refreshed.len(), 1);
+        assert_eq!(refreshed[0].path, "/tmp/new-target");
+    }
+
+    #[test]
+    fn test_dyld_loader_is_included_as_a_loaded_image() {
+        assert_eq!(
+            std::mem::offset_of!(DyldAllImageInfos, dyld_image_load_address),
+            32
+        );
+        assert_eq!(std::mem::size_of::<DyldAllImageInfos>(), 40);
+        let mut images = vec![LoadedImage {
+            load_address: 0x1862_f3000,
+            path: "/usr/lib/system/libdyld.dylib".to_string(),
+        }];
+
+        append_dyld_loader_image(&mut images, 2, 0x1863_28000);
+
+        let dyld = images
+            .iter()
+            .find(|image| image.path == "/usr/lib/dyld")
+            .expect("dyld loader image should be present");
+        assert_eq!(dyld.load_address, 0x1863_28000);
+    }
 
     #[test]
     fn test_strip_pac_aarch64() {

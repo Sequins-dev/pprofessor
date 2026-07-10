@@ -3,7 +3,7 @@ mod cli;
 use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -50,13 +50,63 @@ fn install_signal_handlers() -> Result<()> {
 // ---------------------------------------------------------------------------
 
 fn write_gzip(data: &[u8], output: &Path) -> Result<()> {
-    let file = std::fs::File::create(output)
-        .with_context(|| format!("creating output file {}", output.display()))?;
-    let mut gz = GzEncoder::new(file, Compression::default());
+    let compressed = gzip_data(data)?;
+    std::fs::write(output, compressed)
+        .with_context(|| format!("writing output file {}", output.display()))?;
+    Ok(())
+}
+
+fn gzip_data(data: &[u8]) -> Result<Vec<u8>> {
+    let mut gz = GzEncoder::new(Vec::new(), Compression::default());
     gz.write_all(data)
         .context("writing gzip-compressed profile")?;
-    gz.finish().context("finalizing gzip output")?;
-    Ok(())
+    gz.finish().context("finalizing gzip output")
+}
+
+fn session_id(pid: u32) -> String {
+    let _ = pid;
+    uuid::Uuid::new_v4().to_string()
+}
+
+fn publish_update(
+    profile: &pprofessor::Profile,
+    cursor: &mut pprofessor::RawProfileCursor,
+    symbolizer: &mut Option<pprofessor::NativeSymbolizer>,
+    publisher: &mut pprofessor::SessionPublisher,
+    freq: u32,
+    start_wall: SystemTime,
+) {
+    let snapshot = profile.snapshot_raw();
+    let addresses: Vec<u64> = snapshot
+        .stacks
+        .keys()
+        .flat_map(|(_, stack)| stack.iter().copied())
+        .collect();
+    let symbolizer = symbolizer
+        .get_or_insert_with(|| pprofessor::NativeSymbolizer::new(snapshot.images.clone(), &[]));
+    symbolizer.refresh_images(snapshot.images.clone());
+    symbolizer.resolve_more(&addresses);
+
+    if !publisher.ensure_connected().unwrap_or(false) {
+        return;
+    }
+    let mut candidate = cursor.clone();
+    let Some(delta) = candidate.delta(&snapshot) else {
+        return;
+    };
+    let live = pprofessor::SymbolicatedProfile::from_raw_with_symbolizer(
+        delta,
+        symbolizer,
+        pprofessor::Unresolved::Hex,
+        freq,
+        start_wall,
+    );
+    if publisher
+        .send(pprofessor::FrameKind::ProfileDelta, &live.to_pprof())
+        .unwrap_or(false)
+    {
+        *cursor = candidate;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -105,6 +155,7 @@ fn run_command(
     thread: Option<String>,
     thread_id: Option<u64>,
     main_thread: bool,
+    publish: bool,
 ) -> Result<()> {
     let builder = apply_duration(
         apply_thread_filter(
@@ -122,20 +173,56 @@ fn run_command(
     CHILD_PID.store(handle.pid() as i32, Ordering::Relaxed);
     install_signal_handlers()?;
 
+    let start_wall = SystemTime::now();
     let profile = handle.start()?;
+    let mut publisher = publish.then(|| {
+        pprofessor::SessionPublisher::new(
+            pprofessor::SessionPublisher::default_socket_path(),
+            pprofessor::SessionHello::new(
+                session_id(handle.pid()),
+                "run",
+                handle.pid(),
+                binary.to_string_lossy(),
+                freq,
+            ),
+        )
+    });
+    let mut cursor = pprofessor::RawProfileCursor::default();
+    let mut symbolizer = None;
+    let mut next_publish = Instant::now();
 
     // Wait until the child exits, the duration elapses, or we receive a signal.
     while !STOP_FLAG.load(Ordering::Relaxed) && !profile.is_stopped() {
         std::thread::sleep(Duration::from_millis(50));
+        if let Some(publisher) = publisher.as_mut()
+            && Instant::now() >= next_publish
+        {
+            publish_update(
+                &profile,
+                &mut cursor,
+                &mut symbolizer,
+                publisher,
+                freq,
+                start_wall,
+            );
+            next_publish = Instant::now() + Duration::from_millis(500);
+        }
     }
     profile.signal_stop();
 
     eprintln!("pprofessor: symbolicating...");
+    if let Some(publisher) = publisher.as_mut() {
+        let _ = publisher.send(pprofessor::FrameKind::Finalizing, &[]);
+    }
     let data = profile.stop()?.to_pprof();
 
     CHILD_PID.store(0, Ordering::Relaxed);
 
     write_gzip(&data, &output)?;
+    if let Some(publisher) = publisher.as_mut() {
+        let compressed = gzip_data(&data)?;
+        let _ = publisher.send(pprofessor::FrameKind::FinalProfile, &compressed);
+    }
     eprintln!("pprofessor: profile written to {}", output.display());
 
     Ok(())
@@ -145,7 +232,7 @@ fn run_command(
 // attach subcommand
 // ---------------------------------------------------------------------------
 
-fn attach_command(
+struct AttachOptions {
     pid: u32,
     freq: u32,
     output: std::path::PathBuf,
@@ -153,7 +240,62 @@ fn attach_command(
     thread: Option<String>,
     thread_id: Option<u64>,
     main_thread: bool,
-) -> Result<()> {
+    publish: bool,
+    expected_start_time: Option<u64>,
+    requested_session_id: Option<String>,
+}
+
+fn attach_command(options: AttachOptions) -> Result<()> {
+    let AttachOptions {
+        pid,
+        freq,
+        output,
+        duration,
+        thread,
+        thread_id,
+        main_thread,
+        publish,
+        expected_start_time,
+        requested_session_id,
+    } = options;
+    let target_process = pprofessor::list_processes()?
+        .into_iter()
+        .find(|process| process.pid == pid);
+    if let Some(expected) = expected_start_time {
+        let actual = target_process
+            .as_ref()
+            .map(|process| process.start_time_micros);
+        if actual != Some(expected) {
+            anyhow::bail!("pid {pid} was reused or exited before attach");
+        }
+    }
+    let current_arch = if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else {
+        "x86_64"
+    };
+    if let Some(required_arch) = target_process
+        .as_ref()
+        .and_then(|process| pprofessor::required_helper_arch(current_arch, &process.architecture))
+    {
+        install_signal_handlers()?;
+        let executable = std::env::current_exe().context("locating profiler executable")?;
+        let mut command = std::process::Command::new("/usr/bin/arch");
+        command.arg(format!("-{required_arch}")).arg(executable);
+        command.args(std::env::args_os().skip(1));
+        let mut child = command
+            .spawn()
+            .context("launching matching profiler architecture")?;
+        CHILD_PID.store(child.id() as i32, Ordering::Relaxed);
+        let status = child
+            .wait()
+            .context("waiting for matching profiler architecture")?;
+        CHILD_PID.store(0, Ordering::Relaxed);
+        if !status.success() {
+            anyhow::bail!("matching {required_arch} profiler exited with {status}");
+        }
+        return Ok(());
+    }
     install_signal_handlers()?;
 
     let builder = apply_duration(
@@ -176,18 +318,59 @@ fn attach_command(
     };
     eprintln!("pprofessor: profiling pid {pid} at {freq} Hz{hint}");
 
+    let start_wall = SystemTime::now();
     let profile = handle.start()?;
+    let process_name = pprofessor::list_processes()?
+        .into_iter()
+        .find(|process| process.pid == pid)
+        .map(|process| process.name)
+        .unwrap_or_else(|| pid.to_string());
+    let mut publisher = publish.then(|| {
+        pprofessor::SessionPublisher::new(
+            pprofessor::SessionPublisher::default_socket_path(),
+            pprofessor::SessionHello::new(
+                requested_session_id.unwrap_or_else(|| session_id(pid)),
+                "attach",
+                pid,
+                process_name,
+                freq,
+            ),
+        )
+    });
+    let mut cursor = pprofessor::RawProfileCursor::default();
+    let mut symbolizer = None;
+    let mut next_publish = Instant::now();
 
     // Wait until the target exits, the duration elapses, or we receive a signal.
     while !STOP_FLAG.load(Ordering::Relaxed) && !profile.is_stopped() {
         std::thread::sleep(Duration::from_millis(50));
+        if let Some(publisher) = publisher.as_mut()
+            && Instant::now() >= next_publish
+        {
+            publish_update(
+                &profile,
+                &mut cursor,
+                &mut symbolizer,
+                publisher,
+                freq,
+                start_wall,
+            );
+            next_publish = Instant::now() + Duration::from_millis(500);
+        }
     }
     profile.signal_stop();
 
     eprintln!("pprofessor: symbolicating...");
+    if let Some(publisher) = publisher.as_mut() {
+        let _ = publisher.send(pprofessor::FrameKind::Finalizing, &[]);
+    }
     let data = profile.stop()?.to_pprof();
 
     write_gzip(&data, &output)?;
+    if let Some(publisher) = publisher.as_mut() {
+        let compressed = gzip_data(&data)?;
+        let _ = publisher.send(pprofessor::FrameKind::FinalProfile, &compressed);
+    }
     eprintln!("pprofessor: profile written to {}", output.display());
 
     Ok(())
@@ -202,6 +385,7 @@ fn main() {
 
     let result = match cli.command {
         Command::Run {
+            publish,
             freq,
             output,
             duration,
@@ -219,8 +403,12 @@ fn main() {
             thread,
             thread_id,
             main_thread,
+            publish,
         ),
         Command::Attach {
+            publish,
+            expected_start_time,
+            session_id,
             freq,
             output,
             duration,
@@ -228,7 +416,37 @@ fn main() {
             thread_id,
             main_thread,
             pid,
-        } => attach_command(pid, freq, output, duration, thread, thread_id, main_thread),
+        } => attach_command(AttachOptions {
+            pid,
+            freq,
+            output,
+            duration,
+            thread,
+            thread_id,
+            main_thread,
+            publish,
+            expected_start_time,
+            requested_session_id: session_id,
+        }),
+        Command::Processes { json } => {
+            let processes = pprofessor::list_processes();
+            match processes {
+                Ok(processes) => {
+                    if json {
+                        println!("{}", serde_json::to_string(&processes).unwrap());
+                    } else {
+                        for process in processes {
+                            println!(
+                                "{:>7}  {:<8}  {}",
+                                process.pid, process.architecture, process.name
+                            );
+                        }
+                    }
+                    Ok(())
+                }
+                Err(error) => Err(error),
+            }
+        }
     };
 
     if let Err(e) = result {

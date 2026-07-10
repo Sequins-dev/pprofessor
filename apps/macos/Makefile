@@ -47,7 +47,7 @@ run-app: build-app
 	@APP_PATH=$$(xcodebuild -scheme PProfessor -configuration Debug -showBuildSettings 2>/dev/null | awk -F'= ' '/ BUILT_PRODUCTS_DIR = / { print $$2; exit }')/PProfessor.app; \
 	/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$$APP_PATH" 2>/dev/null || true; \
 	/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f -R -trusted "$$APP_PATH"; \
-	open "$$APP_PATH"
+	open -n "$$APP_PATH"
 
 install: build-app-release
 	@echo "Installing PProfessor.app to /Applications..."

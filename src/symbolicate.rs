@@ -1,12 +1,13 @@
 //! Symbolication: resolve raw instruction pointer addresses to function names
 //! and source locations using DWARF debug info.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 use gimli::{EndianSlice, RunTimeEndian};
 use memmap2::Mmap;
-use object::{Object, ObjectSection, ObjectSegment, ObjectSymbol};
+use object::read::macho::{FatArch, MachOFatFile32, MachOFatFile64};
+use object::{Architecture, FileKind, Object, ObjectSection, ObjectSegment, ObjectSymbol};
 
 use crate::sampler::LoadedImage;
 
@@ -81,7 +82,9 @@ pub struct SymbolInfo {
 /// in the dyld shared cache). Use [`Unresolved`](crate::Unresolved) to control
 /// what happens to unresolved frames.
 pub struct NativeSymbolizer {
+    images: Vec<LoadedImage>,
     resolved: HashMap<u64, SymbolInfo>,
+    attempted: HashSet<u64>,
 }
 
 impl NativeSymbolizer {
@@ -89,9 +92,35 @@ impl NativeSymbolizer {
     /// from the given `images`. Unresolvable addresses are not stored — they
     /// result in `None` from `symbolize_frame`.
     pub fn new(images: Vec<LoadedImage>, addresses: &[u64]) -> Self {
+        let resolved = resolve_all(&images, addresses);
         Self {
-            resolved: resolve_all(&images, addresses),
+            images,
+            resolved,
+            attempted: addresses.iter().copied().collect(),
         }
+    }
+
+    /// Resolve addresses not already seen by this session and retain the results.
+    pub fn resolve_more(&mut self, addresses: &[u64]) {
+        let pending: Vec<u64> = addresses
+            .iter()
+            .copied()
+            .filter(|address| self.attempted.insert(*address))
+            .collect();
+        if !pending.is_empty() {
+            self.resolved.extend(resolve_all(&self.images, &pending));
+        }
+    }
+
+    /// Replace the loaded-image set after the target changes and retry addresses
+    /// that could not be resolved against the previous set.
+    pub fn refresh_images(&mut self, images: Vec<LoadedImage>) {
+        if images.is_empty() || images == self.images {
+            return;
+        }
+        self.images = images;
+        self.attempted
+            .retain(|address| self.resolved.contains_key(address));
     }
 }
 
@@ -116,6 +145,14 @@ struct ImageInfo {
     /// Preferred virtual address of the __TEXT segment (for computing ASLR slide).
     text_vmaddr: u64,
     mmap: Mmap,
+    object_offset: usize,
+    object_len: usize,
+}
+
+impl ImageInfo {
+    fn object_data(&self) -> &[u8] {
+        &self.mmap[self.object_offset..self.object_offset + self.object_len]
+    }
 }
 
 /// Returns true for paths that live in the macOS dyld shared cache rather than
@@ -159,7 +196,7 @@ pub(crate) fn resolve_all(images: &[LoadedImage], addresses: &[u64]) -> HashMap<
             // Reject addresses beyond the end of the image — they belong to JIT
             // code or another region not backed by this file.
             let offset = addr.wrapping_sub(img.load_address);
-            if offset < img.mmap.len() as u64 {
+            if offset < img.object_len as u64 {
                 by_image[idx - 1].push(addr);
             }
         }
@@ -179,15 +216,49 @@ pub(crate) fn resolve_all(images: &[LoadedImage], addresses: &[u64]) -> HashMap<
 fn open_image(path: &str, load_address: u64) -> Result<ImageInfo> {
     let file = std::fs::File::open(path)?;
     let mmap = unsafe { Mmap::map(&file)? };
+    let object_data = native_macho_slice(&mmap)?;
+    let object_offset = object_data.as_ptr() as usize - mmap.as_ptr() as usize;
+    let object_len = object_data.len();
     let text_vmaddr = {
-        let obj = object::File::parse(&*mmap)?;
+        let obj = object::File::parse(object_data)?;
         text_segment_vmaddr(&obj)
     };
     Ok(ImageInfo {
         load_address,
         text_vmaddr,
         mmap,
+        object_offset,
+        object_len,
     })
+}
+
+fn native_macho_slice(data: &[u8]) -> Result<&[u8]> {
+    let native_architecture = if cfg!(target_arch = "aarch64") {
+        Architecture::Aarch64
+    } else {
+        Architecture::X86_64
+    };
+    match FileKind::parse(data)? {
+        FileKind::MachOFat32 => {
+            let fat = MachOFatFile32::parse(data)?;
+            let arch = fat
+                .arches()
+                .iter()
+                .find(|arch| arch.architecture() == native_architecture)
+                .ok_or_else(|| anyhow::anyhow!("universal Mach-O has no native architecture"))?;
+            Ok(arch.data(data)?)
+        }
+        FileKind::MachOFat64 => {
+            let fat = MachOFatFile64::parse(data)?;
+            let arch = fat
+                .arches()
+                .iter()
+                .find(|arch| arch.architecture() == native_architecture)
+                .ok_or_else(|| anyhow::anyhow!("universal Mach-O has no native architecture"))?;
+            Ok(arch.data(data)?)
+        }
+        _ => Ok(data),
+    }
 }
 
 fn text_segment_vmaddr(obj: &object::File<'_>) -> u64 {
@@ -202,12 +273,12 @@ fn text_segment_vmaddr(obj: &object::File<'_>) -> u64 {
 }
 
 fn resolve_for_image(img: &ImageInfo, addrs: &[u64], out: &mut HashMap<u64, SymbolInfo>) {
-    let obj = match object::File::parse(&*img.mmap) {
+    let obj = match object::File::parse(img.object_data()) {
         Ok(o) => o,
         Err(_) => return, // can't open — addresses simply won't be in the result
     };
 
-    let ctx = if img.mmap.len() <= MAX_DWARF_BYTES {
+    let ctx = if img.object_len <= MAX_DWARF_BYTES {
         build_context(&obj)
     } else {
         None
@@ -342,6 +413,72 @@ mod tests {
     fn test_native_symbolizer_unknown_returns_none() {
         let sym = NativeSymbolizer::new(vec![], &[0x1000u64]);
         assert!(sym.symbolize_frame(0x1000).is_none());
+    }
+
+    #[test]
+    fn test_native_symbolizer_can_resolve_incremental_batches() {
+        let mut sym = NativeSymbolizer::new(vec![], &[]);
+        sym.resolve_more(&[0x1000u64, 0x2000u64]);
+        assert!(sym.symbolize_frame(0x1000).is_none());
+    }
+
+    #[test]
+    fn test_native_symbolizer_retries_unresolved_addresses_after_image_refresh() {
+        let path = std::env::current_exe().unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let object = object::File::parse(&*bytes).unwrap();
+        let text_vmaddr = text_segment_vmaddr(&object);
+        let symbol = object
+            .symbols()
+            .find(|symbol| {
+                symbol.address() >= text_vmaddr
+                    && symbol.address() - text_vmaddr < bytes.len() as u64
+                    && symbol.name().is_ok_and(|name| !name.is_empty())
+            })
+            .expect("test executable should contain a resolvable symbol");
+        let load_address = 0x10_0000_0000;
+        let runtime_address = load_address + symbol.address() - text_vmaddr;
+        let mut symbolizer = NativeSymbolizer::new(vec![], &[runtime_address]);
+        assert!(symbolizer.symbolize_frame(runtime_address).is_none());
+
+        symbolizer.refresh_images(vec![LoadedImage {
+            load_address,
+            path: path.to_string_lossy().into_owned(),
+        }]);
+        symbolizer.resolve_more(&[runtime_address]);
+
+        assert!(symbolizer.symbolize_frame(runtime_address).is_some());
+    }
+
+    #[test]
+    fn test_native_symbolizer_resolves_universal_dyld_image() {
+        let path = "/usr/lib/dyld";
+        let bytes = std::fs::read(path).unwrap();
+        let object_data = native_macho_slice(&bytes).unwrap();
+        let object = object::File::parse(object_data).unwrap();
+        let text_vmaddr = text_segment_vmaddr(&object);
+        let start = object
+            .symbols()
+            .find(|symbol| symbol.name().is_ok_and(|name| name == "start"))
+            .expect("native dyld slice should contain start");
+        let load_address = 0x10_0000_0000;
+        let runtime_address = load_address + start.address() - text_vmaddr + 6992;
+
+        let symbolizer = NativeSymbolizer::new(
+            vec![LoadedImage {
+                load_address,
+                path: path.to_string(),
+            }],
+            &[runtime_address],
+        );
+
+        assert_eq!(
+            symbolizer
+                .symbolize_frame(runtime_address)
+                .unwrap()
+                .function,
+            "start"
+        );
     }
 
     #[test]

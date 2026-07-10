@@ -1,152 +1,82 @@
 import SwiftUI
-import AppKit
 
-struct FilterBar: View {
+struct ProfileToolbar: ToolbarContent {
     @Bindable var viewModel: ProfileViewModel
     let onOpenFile: () -> Void
+    let onAttach: () -> Void
 
-    var body: some View {
-        HStack(spacing: 12) {
-            openFileButton
-
-            Divider()
-                .frame(height: 20)
-
-            searchField
-
-            if !viewModel.availableValueTypes.isEmpty {
-                valueTypeMenu(types: viewModel.availableValueTypes)
-
-                Divider()
-                    .frame(height: 20)
+    var body: some ToolbarContent {
+        ToolbarItemGroup(placement: .navigation) {
+            Button(action: onOpenFile) {
+                Label("Open Profile", systemImage: "folder")
             }
+            .help("Open a pprof profile")
 
-            if !viewModel.availableThreads.isEmpty {
-                threadMenu(threads: viewModel.availableThreads)
-
-                Divider()
-                    .frame(height: 20)
+            Button(action: onAttach) {
+                Label("Attach", systemImage: "scope")
             }
+            .help("Attach to a live process")
 
-            ExportButton {
-                Button("Export as JSON") {
-                    viewModel.exportAsJSON()
-                }
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color(NSColor.windowBackgroundColor))
-        .overlay(alignment: .bottom) {
-            Divider()
-        }
-    }
-
-    private var openFileButton: some View {
-        Button(action: onOpenFile) {
-            HStack(spacing: 4) {
-                Image(systemName: "folder")
-                    .font(.caption)
-                Text("Open File...")
-                    .font(.caption)
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(.quaternary)
-            .cornerRadius(4)
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var searchField: some View {
-        HStack(spacing: 4) {
-            Image(systemName: "magnifyingglass")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            TextField("Search frames...", text: $viewModel.searchText)
-                .textFieldStyle(.plain)
-                .font(.caption)
-                .frame(width: 120)
-            if !viewModel.searchText.isEmpty {
-                Button(action: { viewModel.searchText = "" }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(.quaternary)
-        .cornerRadius(4)
-        .fixedSize()
-    }
-
-    private func threadMenu(threads: [String]) -> some View {
-        let label = viewModel.selectedThread ?? "All Threads"
-        return Menu {
-            Button(action: { viewModel.selectedThread = nil }) {
-                HStack {
-                    Text("All Threads")
-                    if viewModel.selectedThread == nil {
-                        Image(systemName: "checkmark")
+            Picker("Sample Type", selection: $viewModel.selectedValueTypeIndex) {
+                if viewModel.availableValueTypes.isEmpty {
+                    Text("Sample Type").tag(0)
+                } else {
+                    ForEach(viewModel.availableValueTypes.indices, id: \.self) { index in
+                        let valueType = viewModel.availableValueTypes[index]
+                        Text("\(valueType.type) (\(valueType.unit))").tag(index)
                     }
                 }
             }
-            Divider()
-            ForEach(threads, id: \.self) { thread in
-                Button(action: { viewModel.selectedThread = thread }) {
-                    HStack {
-                        Text(thread)
-                        if viewModel.selectedThread == thread {
-                            Image(systemName: "checkmark")
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .frame(width: 170)
+            .disabled(viewModel.availableValueTypes.isEmpty)
+            .help("Select the profile sample type")
+
+            Picker("Thread", selection: $viewModel.selectedThread) {
+                Text("All Threads").tag(nil as String?)
+                ForEach(viewModel.availableThreads, id: \.self) { thread in
+                    Text(thread).tag(Optional(thread))
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .frame(width: 180)
+            .disabled(viewModel.availableThreads.isEmpty)
+            .help("Filter the profile by thread")
+        }
+
+        ToolbarItem(placement: .principal) {
+            HStack(spacing: 0) {
+                TextField("Search frames", text: $viewModel.searchText)
+                    .textFieldStyle(.roundedBorder)
+                    .overlay(alignment: .trailing) {
+                        if !viewModel.searchText.isEmpty {
+                            Button {
+                                viewModel.searchText = ""
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Clear search")
+                            .padding(.trailing, 5)
                         }
                     }
-                }
             }
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "cpu")
-                    .font(.caption)
-                Text(label)
-                    .font(.caption)
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(.quaternary)
-            .cornerRadius(4)
+            .frame(minWidth: 160, idealWidth: 360, maxWidth: .infinity)
+            .help("Search frames")
         }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-    }
 
-    private func valueTypeMenu(types: [(type: String, unit: String)]) -> some View {
-        let selectedLabel = types.indices.contains(viewModel.selectedValueTypeIndex)
-            ? types[viewModel.selectedValueTypeIndex].type
-            : types.first?.type ?? "Type"
-
-        return Menu {
-            ForEach(types.indices, id: \.self) { i in
-                Button(action: { viewModel.selectedValueTypeIndex = i }) {
-                    HStack {
-                        Text("\(types[i].type) (\(types[i].unit))")
-                        if viewModel.selectedValueTypeIndex == i {
-                            Image(systemName: "checkmark")
-                        }
-                    }
+        ToolbarItem(placement: .primaryAction) {
+            Menu {
+                if viewModel.sourceURL != nil {
+                    Button("Save Profile...") { viewModel.saveProfile() }
                 }
+                Button("Export as JSON") { viewModel.exportAsJSON() }
+            } label: {
+                Label("Export", systemImage: "square.and.arrow.up")
             }
-        } label: {
-            HStack(spacing: 4) {
-                Text(selectedLabel)
-                    .font(.caption)
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(.quaternary)
-            .cornerRadius(4)
         }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
     }
 }

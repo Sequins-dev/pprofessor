@@ -133,4 +133,33 @@ struct ProfileDecoderTests {
         #expect(decoded.samples[1].values == [200])
         #expect(decoded.samples[1].locationIDs == [2, 1])
     }
+
+    @Test func roundTripMappingAndLocationIdentity() {
+        var encoder = ProfileEncoder()
+        let path = encoder.strings.intern("/tmp/example")
+        let buildID = encoder.strings.intern("ABCDEF")
+        encoder.mappings = [
+            ProfMapping(
+                id: 7,
+                memoryStart: 0x1000,
+                memoryLimit: 0x2000,
+                fileOffset: 0,
+                filename: path,
+                buildID: buildID
+            )
+        ]
+        encoder.locations = [
+            ProfLocation(id: 9, mappingID: 7, address: 0x1234, lines: [])
+        ]
+
+        let decoded = DecodedProfile.decode(from: encoder.encode())
+        #expect(decoded.mappings.count == 1)
+        #expect(decoded.mappings[0].id == 7)
+        #expect(decoded.mappings[0].memoryStart == 0x1000)
+        #expect(decoded.mappings[0].memoryLimit == 0x2000)
+        #expect(decoded.mappings[0].filename == path)
+        #expect(decoded.mappings[0].buildID == buildID)
+        #expect(decoded.locations[0].mappingID == 7)
+        #expect(decoded.locations[0].address == 0x1234)
+    }
 }

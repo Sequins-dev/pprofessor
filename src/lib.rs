@@ -2,16 +2,24 @@ pub mod builder;
 pub(crate) mod encode;
 pub mod handle;
 pub mod pprof;
+#[cfg(target_os = "macos")]
+pub mod processes;
 pub mod profile;
 pub mod sampler;
+pub mod stream;
 pub mod symbolicate;
 pub mod symbolicated;
 
 pub use builder::ProfilerBuilder;
 pub use handle::ProfilerHandle;
 pub use pprof::ProfileEncoder;
+#[cfg(target_os = "macos")]
+pub use processes::{ProcessInfo, list_processes, required_helper_arch};
 pub use profile::Profile;
-pub use sampler::{LoadedImage, RawProfile, ThreadFilter};
+pub use sampler::{LoadedImage, RawProfile, RawProfileCursor, ThreadFilter};
+pub use stream::{
+    FrameKind, STREAM_HEADER_LEN, SessionHello, SessionPublisher, StreamHeader, StreamProtocolError,
+};
 pub use symbolicate::{FrameInfo, NativeSymbolizer, Symbolizer, SymbolizerChain};
 pub use symbolicated::{Sample, StackFrame, SymbolicatedProfile, TreeNode, Unresolved};
 

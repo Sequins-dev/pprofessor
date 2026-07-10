@@ -56,11 +56,16 @@ run-app:
 install:
 	$(MAKE) -C apps/macos install
 
-cli-helper: rust-build
+cli-helper:
 	@mkdir -p $(CLI_HELPER_DIR)
-	@cp target/debug/$(CLI_NAME) $(CLI_HELPER)
+	MACOSX_DEPLOYMENT_TARGET=$(MACOS_DEPLOYMENT_TARGET) cargo build --target aarch64-apple-darwin
+	MACOSX_DEPLOYMENT_TARGET=$(MACOS_DEPLOYMENT_TARGET) cargo build --target x86_64-apple-darwin
+	lipo -create \
+		target/aarch64-apple-darwin/debug/$(CLI_NAME) \
+		target/x86_64-apple-darwin/debug/$(CLI_NAME) \
+		-output $(CLI_HELPER)
 	@chmod 755 $(CLI_HELPER)
-	codesign --force --entitlements entitlements.plist --sign "$(SIGN_IDENTITY)" $(CLI_HELPER)
+	codesign --force --options runtime --entitlements entitlements.plist --sign "$(SIGN_IDENTITY)" $(CLI_HELPER)
 	@echo "Built $(CLI_HELPER)"
 
 cli-helper-universal:

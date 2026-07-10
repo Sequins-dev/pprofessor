@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 /// A loaded image (shared library or executable) in the target process.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LoadedImage {
     /// Address at which the image's __TEXT segment was loaded.
     pub load_address: u64,
@@ -35,6 +35,7 @@ pub enum ThreadFilter {
 }
 
 /// Raw sample data accumulated across the profiling session.
+#[derive(Clone)]
 pub struct RawProfile {
     /// Maps `(thread_id, stack)` to sample counts.
     pub stacks: HashMap<(u64, Vec<u64>), u64>,
@@ -44,6 +45,34 @@ pub struct RawProfile {
     pub end_time: Instant,
     /// Loaded images captured from the target at profile end (for symbolication).
     pub images: Vec<LoadedImage>,
+}
+
+#[derive(Clone, Default)]
+pub struct RawProfileCursor {
+    counts: HashMap<(u64, Vec<u64>), u64>,
+}
+
+impl RawProfileCursor {
+    pub fn delta(&mut self, profile: &RawProfile) -> Option<RawProfile> {
+        let mut stacks = HashMap::new();
+        for (key, &count) in &profile.stacks {
+            let previous = self.counts.get(key).copied().unwrap_or(0);
+            if count > previous {
+                stacks.insert(key.clone(), count - previous);
+                self.counts.insert(key.clone(), count);
+            }
+        }
+        if stacks.is_empty() {
+            return None;
+        }
+        Some(RawProfile {
+            stacks,
+            thread_names: profile.thread_names.clone(),
+            start_time: profile.start_time,
+            end_time: profile.end_time,
+            images: profile.images.clone(),
+        })
+    }
 }
 
 #[cfg(target_os = "macos")]
