@@ -92,6 +92,24 @@ struct ContentView: View {
         } else if viewModel.nodes.isEmpty {
             ProfileEmptyState(isLoading: false, onOpenFile: { showFileImporter = true })
         } else {
+            profileContent
+        }
+    }
+
+    private var profileContent: some View {
+        VStack(spacing: 0) {
+            if let timeline = viewModel.timeline,
+               let selection = viewModel.timelineSelection {
+                ProfileTimelineView(
+                    timeline: timeline,
+                    range: selection.range,
+                    onRangeChange: { range, isDragging in
+                        viewModel.selectTimeRange(range, isDragging: isDragging)
+                    },
+                    onReset: { viewModel.resetTimeRange() }
+                )
+                Divider()
+            }
             profileGraph
         }
     }

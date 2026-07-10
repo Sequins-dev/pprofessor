@@ -34,7 +34,7 @@ use mach2::port::mach_port_t;
 use mach2::thread_act::{thread_resume, thread_suspend};
 use mach2::vm_types::mach_vm_address_t;
 
-use super::{LoadedImage, RawProfile, ThreadFilter, ThreadSample};
+use super::{LoadedImage, RawProfile, RawSampleSeries, ThreadFilter, ThreadSample};
 
 // ---------------------------------------------------------------------------
 // FFI: functions not yet bound by mach2
@@ -434,7 +434,11 @@ impl MacosSampler {
     ///
     /// `skip_thread`: if provided, skip sampling that thread (used to skip the
     /// sampler's own background thread when profiling the current process).
-    fn sample_once(&self, skip_thread: Option<mach_port_t>) -> Vec<ThreadSample> {
+    fn sample_once(
+        &self,
+        skip_thread: Option<mach_port_t>,
+        start_time: Instant,
+    ) -> Vec<ThreadSample> {
         let mut samples = Vec::new();
 
         let mut thread_list: thread_act_array_t = std::ptr::null_mut();
@@ -474,6 +478,7 @@ impl MacosSampler {
                     thread_id,
                     thread_name,
                     stack,
+                    timestamp_nanos: Instant::now().duration_since(start_time).as_nanos() as u64,
                 });
             }
 
@@ -600,15 +605,16 @@ impl MacosSampler {
                 next_image_refresh = Instant::now() + Duration::from_millis(500);
             }
 
-            let round = self.sample_once(skip_thread);
+            let round = self.sample_once(skip_thread, start_time);
             {
                 let mut current = live.lock().unwrap();
                 for sample in round {
                     if !sample.stack.is_empty() {
-                        *current
+                        current
                             .stacks
                             .entry((sample.thread_id, sample.stack))
-                            .or_insert(0) += 1;
+                            .or_insert_with(|| RawSampleSeries::timed(Vec::new()))
+                            .push_timestamp(sample.timestamp_nanos);
                         if !sample.thread_name.is_empty() {
                             current
                                 .thread_names

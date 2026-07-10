@@ -62,18 +62,20 @@ final class SessionCoordinator {
 
     func select(_ session: ProfileSession, viewModel: ProfileViewModel) {
         selectedSessionID = session.id
-        onSelectedProfile = { [weak viewModel] profile in viewModel?.loadDecodedProfile(profile) }
+        onSelectedProfile = { [weak viewModel] profile in
+            viewModel?.loadDecodedProfile(profile, resetTimelineSelection: false)
+        }
         onSelectedArtifact = { [weak viewModel] url in
             guard let viewModel else { return }
             Task { await viewModel.loadFile(url: url) }
         }
         if let runtime = runtimes[session.id] {
-            viewModel.loadDecodedProfile(runtime.accumulator.profile)
+            viewModel.loadDecodedProfile(runtime.accumulator.profile, resetTimelineSelection: true)
         } else if let relative = session.artifactRelativePath {
             Task { await viewModel.loadFile(url: storageRoot.appendingPathComponent(relative)) }
         } else if let relative = session.journalRelativePath,
                   let profile = replayJournal(at: storageRoot.appendingPathComponent(relative), sessionID: session.id) {
-            viewModel.loadDecodedProfile(profile)
+            viewModel.loadDecodedProfile(profile, resetTimelineSelection: true)
         }
     }
 

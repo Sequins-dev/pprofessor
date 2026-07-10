@@ -20,34 +20,18 @@ public struct ProfileConversionResult: Sendable {
 public func convertProfile(
     _ profile: DecodedProfile,
     valueTypeIndex: Int = 0,
-    threadFilter: String? = nil
+    threadFilter: String? = nil,
+    timeRangeNanos: ClosedRange<Int64>? = nil
 ) -> ProfileConversionResult {
     // Build value type names for the UI selector
     let valueTypeNames: [(type: String, unit: String)] = profile.sampleTypes.map { vt in
         (type: profile.string(at: vt.type), unit: profile.string(at: vt.unit))
     }
 
-    // Keys that indicate thread identity in pprof labels
-    let threadKeys: Set<String> = ["thread", "tid", "thread_id", "thread_name", "threadName", "thread.id", "thread.name"]
-
-    /// Extract the thread label string from a sample, if any.
-    func threadLabel(for sample: ProfSample) -> String? {
-        for label in sample.labels {
-            let key = profile.string(at: label.key)
-            guard threadKeys.contains(key) else { continue }
-            if label.str != 0 {
-                return profile.string(at: label.str)
-            } else if label.num != 0 {
-                return "\(label.num)"
-            }
-        }
-        return nil
-    }
-
     // Collect all unique thread labels across all samples (sorted)
     var threadSet = Set<String>()
     for sample in profile.samples {
-        if let t = threadLabel(for: sample) { threadSet.insert(t) }
+        if let t = profileThreadLabel(profile: profile, sample: sample) { threadSet.insert(t) }
     }
     let availableThreads = threadSet.sorted()
 
@@ -112,7 +96,13 @@ public func convertProfile(
 
         // Apply thread filter
         if let filter = threadFilter {
-            guard threadLabel(for: sample) == filter else { continue }
+            guard profileThreadLabel(profile: profile, sample: sample) == filter else { continue }
+        }
+
+        if let timeRangeNanos {
+            guard let timestamp = profileTimestampNanos(profile: profile, sample: sample),
+                  timeRangeNanos.contains(timestamp)
+            else { continue }
         }
 
         // pprof location IDs are leaf-first; reverse to get root→leaf order

@@ -15,6 +15,37 @@ pub struct ThreadSample {
     pub thread_id: u64,
     pub thread_name: String,
     pub stack: Vec<u64>,
+    pub timestamp_nanos: u64,
+}
+
+/// Aggregated observations of one `(thread, stack)` pair.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawSampleSeries {
+    pub count: u64,
+    pub timestamps_nanos: Option<Vec<u64>>,
+}
+
+impl RawSampleSeries {
+    pub fn untimed(count: u64) -> Self {
+        Self {
+            count,
+            timestamps_nanos: None,
+        }
+    }
+
+    pub fn timed(timestamps_nanos: Vec<u64>) -> Self {
+        Self {
+            count: timestamps_nanos.len() as u64,
+            timestamps_nanos: Some(timestamps_nanos),
+        }
+    }
+
+    pub(crate) fn push_timestamp(&mut self, timestamp_nanos: u64) {
+        self.count = self.count.saturating_add(1);
+        self.timestamps_nanos
+            .get_or_insert_with(Vec::new)
+            .push(timestamp_nanos);
+    }
 }
 
 /// Controls which threads are sampled.
@@ -37,8 +68,8 @@ pub enum ThreadFilter {
 /// Raw sample data accumulated across the profiling session.
 #[derive(Clone)]
 pub struct RawProfile {
-    /// Maps `(thread_id, stack)` to sample counts.
-    pub stacks: HashMap<(u64, Vec<u64>), u64>,
+    /// Maps `(thread_id, stack)` to counts and optional observation timestamps.
+    pub stacks: HashMap<(u64, Vec<u64>), RawSampleSeries>,
     /// Maps thread ID to the last-observed thread name.
     pub thread_names: HashMap<u64, String>,
     pub start_time: Instant,
@@ -55,11 +86,21 @@ pub struct RawProfileCursor {
 impl RawProfileCursor {
     pub fn delta(&mut self, profile: &RawProfile) -> Option<RawProfile> {
         let mut stacks = HashMap::new();
-        for (key, &count) in &profile.stacks {
+        for (key, series) in &profile.stacks {
             let previous = self.counts.get(key).copied().unwrap_or(0);
-            if count > previous {
-                stacks.insert(key.clone(), count - previous);
-                self.counts.insert(key.clone(), count);
+            if series.count > previous {
+                let timestamps_nanos = series
+                    .timestamps_nanos
+                    .as_ref()
+                    .map(|timestamps| timestamps.iter().skip(previous as usize).copied().collect());
+                stacks.insert(
+                    key.clone(),
+                    RawSampleSeries {
+                        count: series.count - previous,
+                        timestamps_nanos,
+                    },
+                );
+                self.counts.insert(key.clone(), series.count);
             }
         }
         if stacks.is_empty() {
