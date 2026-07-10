@@ -33,7 +33,7 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Run tests
-        run: cargo test
+        run: cargo test -- --test-threads=1
 
   swift:
     name: Swift (build, test, app)
