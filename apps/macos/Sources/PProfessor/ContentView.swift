@@ -45,6 +45,19 @@ struct ContentView: View {
                 catch { coordinator.lastError = error.localizedDescription }
             }
         }
+        .alert(
+            "PProfessor Error",
+            isPresented: Binding(
+                get: { coordinator.lastError != nil },
+                set: { isPresented in
+                    if !isPresented { coordinator.lastError = nil }
+                }
+            )
+        ) {
+            Button("OK") { coordinator.lastError = nil }
+        } message: {
+            Text(coordinator.lastError ?? "An unknown error occurred.")
+        }
         .fileImporter(
             isPresented: $showFileImporter,
             allowedContentTypes: [.item],

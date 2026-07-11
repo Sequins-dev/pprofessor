@@ -96,6 +96,48 @@ public struct TimelineSelectionState: Sendable, Equatable {
     }
 }
 
+public struct ProfilePresentation: Sendable {
+    public let timeline: ProfileTimeline?
+    public let timelineSelection: TimelineSelectionState?
+    public let conversion: ProfileConversionResult
+}
+
+public func buildProfilePresentation(
+    profile: DecodedProfile,
+    valueTypeIndex: Int,
+    threadFilter: String?,
+    selection: TimelineSelectionState?,
+    resetSelection: Bool,
+    bucketCount: Int
+) -> ProfilePresentation {
+    let timeline = ProfileTimeline.build(
+        from: profile,
+        valueTypeIndex: valueTypeIndex,
+        threadFilter: threadFilter,
+        bucketCount: bucketCount
+    )
+    var updatedSelection = selection
+    if let timeline {
+        if resetSelection || updatedSelection == nil {
+            updatedSelection = TimelineSelectionState(durationNanos: timeline.durationNanos)
+        } else {
+            updatedSelection?.updateDuration(timeline.durationNanos)
+        }
+    } else {
+        updatedSelection = nil
+    }
+    return ProfilePresentation(
+        timeline: timeline,
+        timelineSelection: updatedSelection,
+        conversion: convertProfile(
+            profile,
+            valueTypeIndex: valueTypeIndex,
+            threadFilter: threadFilter,
+            timeRangeNanos: updatedSelection?.range
+        )
+    )
+}
+
 func profileTimestampNanos(profile: DecodedProfile, sample: ProfSample) -> Int64? {
     for label in sample.labels where profile.string(at: label.key) == pprofessorTimestampLabel {
         let unit = label.numUnit == 0 ? "" : profile.string(at: label.numUnit)

@@ -245,6 +245,25 @@ struct AttachOptions {
     requested_session_id: Option<String>,
 }
 
+fn validate_process_identity(pid: u32, expected: u64, actual: Option<u64>) -> Result<()> {
+    if actual != Some(expected) {
+        anyhow::bail!(
+            "cannot attach to pid {pid}: the selected process exited or its PID was reused"
+        );
+    }
+    Ok(())
+}
+
+fn attach_preflight_error(pid: u32, attachable: bool, reason: Option<&str>) -> Option<String> {
+    (!attachable).then(|| {
+        format!(
+            "cannot attach to pid {pid}: the target process is protected by macOS and does not permit debugging. \
+             Production-signed and system processes normally omit the get-task-allow entitlement.{}",
+            reason.map(|reason| format!(" ({reason})")).unwrap_or_default()
+        )
+    })
+}
+
 fn attach_command(options: AttachOptions) -> Result<()> {
     let AttachOptions {
         pid,
@@ -265,9 +284,16 @@ fn attach_command(options: AttachOptions) -> Result<()> {
         let actual = target_process
             .as_ref()
             .map(|process| process.start_time_micros);
-        if actual != Some(expected) {
-            anyhow::bail!("pid {pid} was reused or exited before attach");
-        }
+        validate_process_identity(pid, expected, actual)?;
+    }
+    if let Some(process) = target_process.as_ref()
+        && let Some(error) = attach_preflight_error(
+            pid,
+            process.attachable,
+            process.attachability_reason.as_deref(),
+        )
+    {
+        anyhow::bail!(error);
     }
     let current_arch = if cfg!(target_arch = "aarch64") {
         "arm64"
@@ -452,5 +478,36 @@ fn main() {
     if let Err(e) = result {
         eprintln!("pprofessor: error: {e:#}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod attach_error_tests {
+    use super::*;
+
+    #[test]
+    fn protected_target_error_explains_target_policy() {
+        let error = attach_preflight_error(
+            42,
+            false,
+            Some("Protected by macOS: this process does not allow debugging"),
+        )
+        .expect("protected target should produce an error");
+
+        assert!(error.contains("target process is protected by macOS"));
+        assert!(error.contains("get-task-allow"));
+        assert!(!error.contains("sign the profiler"));
+    }
+
+    #[test]
+    fn attachable_target_has_no_preflight_error() {
+        assert!(attach_preflight_error(42, true, None).is_none());
+    }
+
+    #[test]
+    fn pid_identity_error_distinguishes_exit_or_reuse() {
+        let error = validate_process_identity(42, 123, Some(456)).unwrap_err();
+
+        assert!(error.to_string().contains("exited or its PID was reused"));
     }
 }

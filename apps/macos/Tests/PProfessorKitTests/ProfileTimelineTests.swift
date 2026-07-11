@@ -98,4 +98,21 @@ struct ProfileTimelineTests {
         #expect(selection.range == 0...300)
         #expect(selection.isFollowingLive)
     }
+
+    @Test func presentationBuildUpdatesFollowingRangeBeforeConverting() {
+        let input = profile(timestamps: [0, 10, 20], values: [1, 2, 3])
+        let priorSelection = TimelineSelectionState(durationNanos: 10)
+
+        let presentation = buildProfilePresentation(
+            profile: input,
+            valueTypeIndex: 0,
+            threadFilter: nil,
+            selection: priorSelection,
+            resetSelection: false,
+            bucketCount: 512
+        )
+
+        #expect(presentation.timelineSelection?.range == 0...30)
+        #expect(presentation.conversion.totalValue == 6)
+    }
 }
