@@ -26,6 +26,7 @@ final class ProfileViewModel {
     var selectedValueTypeIndex: Int = 0 {
         didSet {
             guard let profile = decodedProfile else { return }
+            invalidateLivePresentation()
             rebuildTimeline(profile: profile)
             recompute(profile: profile)
         }
@@ -33,6 +34,7 @@ final class ProfileViewModel {
     var selectedThread: String? = nil {
         didSet {
             guard let profile = decodedProfile else { return }
+            invalidateLivePresentation()
             rebuildTimeline(profile: profile)
             recompute(profile: profile)
         }
@@ -46,6 +48,13 @@ final class ProfileViewModel {
     private var rangeConversionTask: Task<Void, Never>?
     private var pendingRangeProfile: DecodedProfile?
     private var recomputeGeneration = 0
+    private struct PendingLivePresentation {
+        let profile: DecodedProfile
+        let resetSelection: Bool
+    }
+    private var pendingLivePresentation: PendingLivePresentation?
+    private var livePresentationTask: Task<Void, Never>?
+    private var livePresentationGeneration = 0
 
     func loadDecodedProfile(_ profile: DecodedProfile, resetTimelineSelection: Bool = false) {
         error = nil
@@ -58,8 +67,7 @@ final class ProfileViewModel {
         if !availableValueTypes.indices.contains(selectedValueTypeIndex) {
             selectedValueTypeIndex = 0
         }
-        rebuildTimeline(profile: profile, resetSelection: resetTimelineSelection)
-        recompute(profile: profile)
+        enqueueLivePresentation(profile: profile, resetSelection: resetTimelineSelection)
     }
 
     func selectTimeRange(_ range: ClosedRange<Int64>, isDragging: Bool) {
@@ -82,6 +90,7 @@ final class ProfileViewModel {
     // MARK: - File loading
 
     func loadFile(url: URL) async {
+        invalidateLivePresentation()
         isLoading = true
         error = nil
         nodes = []
@@ -204,6 +213,53 @@ final class ProfileViewModel {
             timeRangeNanos: timelineSelection?.range
         )
         apply(result)
+    }
+
+    private func enqueueLivePresentation(profile: DecodedProfile, resetSelection: Bool) {
+        livePresentationGeneration += 1
+        pendingLivePresentation = PendingLivePresentation(
+            profile: profile,
+            resetSelection: resetSelection
+        )
+        startNextLivePresentationIfNeeded()
+    }
+
+    private func startNextLivePresentationIfNeeded() {
+        guard livePresentationTask == nil, let request = pendingLivePresentation else { return }
+        pendingLivePresentation = nil
+        let generation = livePresentationGeneration
+        let valueTypeIndex = selectedValueTypeIndex
+        let threadFilter = selectedThread
+        let selection = timelineSelection
+        livePresentationTask = Task { [weak self] in
+            let presentation = await Task.detached(priority: .userInitiated) {
+                buildProfilePresentation(
+                    profile: request.profile,
+                    valueTypeIndex: valueTypeIndex,
+                    threadFilter: threadFilter,
+                    selection: selection,
+                    resetSelection: request.resetSelection,
+                    bucketCount: 512
+                )
+            }.value
+            guard let self else { return }
+            let shouldApply = !Task.isCancelled
+                && self.livePresentationGeneration == generation
+                && self.pendingLivePresentation == nil
+            self.livePresentationTask = nil
+            if shouldApply {
+                self.timeline = presentation.timeline
+                self.timelineSelection = presentation.timelineSelection
+                self.apply(presentation.conversion)
+            }
+            self.startNextLivePresentationIfNeeded()
+        }
+    }
+
+    private func invalidateLivePresentation() {
+        livePresentationGeneration += 1
+        pendingLivePresentation = nil
+        livePresentationTask?.cancel()
     }
 
     private func rebuildTimeline(profile: DecodedProfile, resetSelection: Bool = false) {

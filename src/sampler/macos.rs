@@ -21,6 +21,7 @@
 //! 5. At shutdown, read the target's dyld image list for symbolication.
 
 use std::os::unix::process::CommandExt;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -268,6 +269,7 @@ pub struct MacosSampler {
     /// True when profiling the current process. The sampling thread skips itself
     /// by capturing mach_thread_self() at the start of each run_sampling_loop call.
     is_self: bool,
+    executable_path: Option<String>,
     /// Which threads to include in the profile.
     pub thread_filter: ThreadFilter,
 }
@@ -289,8 +291,8 @@ impl MacosSampler {
         if kr != KERN_SUCCESS {
             bail!(
                 "task_for_pid({pid}) failed (mach error {kr}).\n\
-                 Hint: run with sudo, or sign the binary:\n\
-                 \t make sign   # self-signs with com.apple.security.cs.debugger"
+                 The profiler needs the com.apple.security.cs.debugger entitlement. \
+                 Hardened targets must also opt into debugging with com.apple.security.get-task-allow."
             );
         }
         Ok(MacosSampler {
@@ -298,6 +300,7 @@ impl MacosSampler {
             freq_hz,
             owns_task_port: true,
             is_self: false,
+            executable_path: process_executable_path(pid),
             thread_filter: ThreadFilter::All,
         })
     }
@@ -313,6 +316,9 @@ impl MacosSampler {
             freq_hz,
             owns_task_port: false, // mach_task_self() is a pseudo-port, never deallocate
             is_self: true,
+            executable_path: std::env::current_exe()
+                .ok()
+                .map(|path| path.to_string_lossy().into_owned()),
             thread_filter: ThreadFilter::All,
         })
     }
@@ -727,7 +733,7 @@ impl MacosSampler {
             if !path.is_empty() {
                 images.push(LoadedImage {
                     load_address: entry.image_load_address,
-                    path,
+                    path: resolve_image_path(&path, self.executable_path.as_deref()),
                 });
             }
         }
@@ -740,6 +746,31 @@ impl MacosSampler {
 
         Ok(images)
     }
+}
+
+fn process_executable_path(pid: u32) -> Option<String> {
+    let mut path = [0u8; 4096];
+    let length = unsafe {
+        libc::proc_pidpath(
+            pid as libc::c_int,
+            path.as_mut_ptr().cast(),
+            path.len() as u32,
+        )
+    };
+    (length > 0).then(|| String::from_utf8_lossy(&path[..length as usize]).into_owned())
+}
+
+fn resolve_image_path(path: &str, executable_path: Option<&str>) -> String {
+    let image_path = Path::new(path);
+    if image_path.is_absolute() {
+        return path.to_string();
+    }
+    if let Some(executable_path) = executable_path
+        && image_path.file_name() == Path::new(executable_path).file_name()
+    {
+        return executable_path.to_string();
+    }
+    path.to_string()
 }
 
 fn append_dyld_loader_image(images: &mut Vec<LoadedImage>, version: u32, load_address: u64) {
@@ -819,6 +850,26 @@ mod tests {
             .find(|image| image.path == "/usr/lib/dyld")
             .expect("dyld loader image should be present");
         assert_eq!(dyld.load_address, 0x1863_28000);
+    }
+
+    #[test]
+    fn relative_main_image_uses_process_executable_path() {
+        let resolved = resolve_image_path(
+            "target/debug/sequins-daemon",
+            Some("/Users/test/sequins/target/debug/sequins-daemon"),
+        );
+
+        assert_eq!(resolved, "/Users/test/sequins/target/debug/sequins-daemon");
+    }
+
+    #[test]
+    fn absolute_image_path_is_preserved() {
+        let resolved = resolve_image_path(
+            "/tmp/libexample.dylib",
+            Some("/Users/test/sequins/target/debug/sequins-daemon"),
+        );
+
+        assert_eq!(resolved, "/tmp/libexample.dylib");
     }
 
     #[test]

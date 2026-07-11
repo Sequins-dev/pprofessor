@@ -62,6 +62,9 @@ final class SessionCoordinator {
 
     func select(_ session: ProfileSession, viewModel: ProfileViewModel) {
         selectedSessionID = session.id
+        if session.status == .failed, let errorSummary = session.errorSummary, !errorSummary.isEmpty {
+            lastError = errorSummary
+        }
         onSelectedProfile = { [weak viewModel] profile in
             viewModel?.loadDecodedProfile(profile, resetTimelineSelection: false)
         }
@@ -202,6 +205,7 @@ final class SessionCoordinator {
         case .failed:
             session.status = .failed
             session.errorSummary = String(data: frame.payload, encoding: .utf8)
+            lastError = session.errorSummary ?? "Profiling failed without an error message."
             session.endedAt = Date()
             try? modelContext.save()
         default:
@@ -280,6 +284,7 @@ final class SessionCoordinator {
         } catch {
             session.status = .failed
             session.errorSummary = error.localizedDescription
+            lastError = session.errorSummary
             try? modelContext.save()
         }
     }
@@ -348,23 +353,18 @@ final class SessionCoordinator {
               session.status == .connecting || session.status == .live || session.status == .finalizing
         else { return }
         if status != 0 {
+            let trimmedMessage = message?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let failureMessage = if let trimmedMessage, !trimmedMessage.isEmpty {
+                trimmedMessage
+            } else {
+                "Profiler exited with status \(status) without an error message."
+            }
             session.status = .failed
-            session.errorSummary = message?.trimmingCharacters(in: .whitespacesAndNewlines)
+            session.errorSummary = failureMessage
+            lastError = failureMessage
             session.endedAt = Date()
             session.updatedAt = Date()
             try? modelContext.save()
         }
     }
-}
-
-struct AttachProcessInfo: Codable, Identifiable, Hashable {
-    let pid: UInt32
-    let parentPid: UInt32
-    let uid: UInt32
-    let name: String
-    let executablePath: String?
-    let startTimeMicros: UInt64
-    let architecture: String
-
-    var id: String { "\(pid)-\(startTimeMicros)" }
 }

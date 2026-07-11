@@ -12,6 +12,57 @@ pub struct ProcessInfo {
     pub executable_path: Option<String>,
     pub start_time_micros: u64,
     pub architecture: String,
+    pub attachable: bool,
+    pub attachability_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Attachability {
+    attachable: bool,
+    reason: Option<String>,
+}
+
+const CS_OPS_STATUS: libc::c_uint = 0;
+const CS_GET_TASK_ALLOW: u32 = 0x0000_0004;
+const CS_RUNTIME: u32 = 0x0001_0000;
+const CS_PLATFORM_BINARY: u32 = 0x0400_0000;
+const SYS_CSOPS: libc::c_int = 169;
+
+fn classify_attachability(code_signing_flags: u32) -> Attachability {
+    let target_allows_debugging = code_signing_flags & CS_GET_TASK_ALLOW != 0;
+    let target_is_protected = code_signing_flags & (CS_RUNTIME | CS_PLATFORM_BINARY) != 0;
+    if target_is_protected && !target_allows_debugging {
+        Attachability {
+            attachable: false,
+            reason: Some("Protected by macOS: this process does not allow debugging".to_string()),
+        }
+    } else {
+        Attachability {
+            attachable: true,
+            reason: None,
+        }
+    }
+}
+
+fn process_attachability(pid: i32) -> Attachability {
+    let mut flags = 0u32;
+    let result = unsafe {
+        libc::syscall(
+            SYS_CSOPS,
+            pid,
+            CS_OPS_STATUS,
+            &mut flags as *mut u32,
+            size_of::<u32>(),
+        )
+    };
+    if result == 0 {
+        classify_attachability(flags)
+    } else {
+        Attachability {
+            attachable: true,
+            reason: None,
+        }
+    }
 }
 
 #[repr(C)]
@@ -109,6 +160,7 @@ pub fn list_processes() -> Result<Vec<ProcessInfo>> {
             "unknown"
         };
 
+        let attachability = process_attachability(pid);
         result.push(ProcessInfo {
             pid: bsd.pbi_pid,
             parent_pid: bsd.pbi_ppid,
@@ -120,6 +172,8 @@ pub fn list_processes() -> Result<Vec<ProcessInfo>> {
                 .saturating_mul(1_000_000)
                 .saturating_add(bsd.pbi_start_tvusec),
             architecture: architecture.to_string(),
+            attachable: attachability.attachable,
+            attachability_reason: attachability.reason,
         });
     }
     result.sort_by(|a, b| {
@@ -144,4 +198,45 @@ fn c_char_array<const N: usize>(value: &[libc::c_char; N]) -> Option<String> {
         .map(|byte| *byte as u8)
         .collect();
     (!bytes.is_empty()).then(|| String::from_utf8_lossy(&bytes).into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hardened_process_without_get_task_allow_is_protected() {
+        let attachability = classify_attachability(CS_RUNTIME);
+
+        assert!(!attachability.attachable);
+        assert!(
+            attachability
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("does not allow debugging"))
+        );
+    }
+
+    #[test]
+    fn platform_binary_without_get_task_allow_is_protected() {
+        let attachability = classify_attachability(CS_PLATFORM_BINARY);
+
+        assert!(!attachability.attachable);
+    }
+
+    #[test]
+    fn get_task_allow_makes_hardened_process_attachable() {
+        let attachability = classify_attachability(CS_RUNTIME | CS_GET_TASK_ALLOW);
+
+        assert!(attachability.attachable);
+        assert!(attachability.reason.is_none());
+    }
+
+    #[test]
+    fn non_hardened_process_is_attachable() {
+        let attachability = classify_attachability(0);
+
+        assert!(attachability.attachable);
+        assert!(attachability.reason.is_none());
+    }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import PProfessorKit
 import SwiftUI
 
 struct ProcessPickerView: View {
@@ -16,6 +17,11 @@ struct ProcessPickerView: View {
                 || ($0.executablePath?.localizedCaseInsensitiveContains(search) ?? false)
                 || String($0.pid).contains(search)
         }
+    }
+
+    private var selectedProcess: AttachProcessInfo? {
+        guard let selection else { return nil }
+        return processes.first(where: { $0.id == selection })
     }
 
     var body: some View {
@@ -41,12 +47,12 @@ struct ProcessPickerView: View {
                 Button("Cancel") { dismiss() }
                 Spacer()
                 Button("Attach") {
-                    guard let selection, let process = processes.first(where: { $0.id == selection }) else { return }
+                    guard let process = selectedProcess, process.canAttach else { return }
                     onAttach(process)
                     dismiss()
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(selection == nil)
+                .disabled(selectedProcess?.canAttach != true)
             }
         }
         .padding()
@@ -61,8 +67,10 @@ struct ProcessPickerView: View {
 
     private func refresh() async {
         do {
-            processes = try await ProcessListLoader.load()
-                .filter { Int32($0.pid) != ProcessInfo.processInfo.processIdentifier }
+            processes = AttachProcessInfo.pickerTargets(
+                try await ProcessListLoader.load(),
+                excludingPID: UInt32(ProcessInfo.processInfo.processIdentifier)
+            )
             error = nil
         } catch {
             self.error = error.localizedDescription

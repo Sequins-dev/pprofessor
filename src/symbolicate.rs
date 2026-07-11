@@ -283,6 +283,7 @@ fn resolve_for_image(img: &ImageInfo, addrs: &[u64], out: &mut HashMap<u64, Symb
     } else {
         None
     };
+    let symbols = build_symbol_index(&obj);
 
     for &addr in addrs {
         let file_addr = addr
@@ -291,9 +292,9 @@ fn resolve_for_image(img: &ImageInfo, addrs: &[u64], out: &mut HashMap<u64, Symb
 
         let sym = if let Some(ref ctx) = ctx {
             resolve_with_ctx(ctx, file_addr, addr)
-                .or_else(|| resolve_via_symbol_table(&obj, file_addr))
+                .or_else(|| resolve_via_symbol_index(&symbols, file_addr))
         } else {
-            resolve_via_symbol_table(&obj, file_addr)
+            resolve_via_symbol_index(&symbols, file_addr)
         };
 
         if let Some(info) = sym {
@@ -357,29 +358,24 @@ fn resolve_with_ctx<R: gimli::Reader>(
     })
 }
 
-fn resolve_via_symbol_table(obj: &object::File<'_>, file_addr: u64) -> Option<SymbolInfo> {
-    let mut best: Option<(u64, String)> = None;
+fn build_symbol_index(obj: &object::File<'_>) -> Vec<(u64, String)> {
+    let mut symbols: Vec<(u64, String)> = obj
+        .symbols()
+        .filter_map(|symbol| {
+            let address = symbol.address();
+            let name = symbol.name().ok()?;
+            (address != 0 && !name.is_empty()).then(|| (address, name.to_string()))
+        })
+        .collect();
+    symbols.sort_by_key(|(address, _)| *address);
+    symbols
+}
 
-    for sym in obj.symbols() {
-        let sym_addr = sym.address();
-        if sym_addr == 0 || sym_addr > file_addr {
-            continue;
-        }
-        let name = sym.name().unwrap_or("").to_string();
-        if name.is_empty() {
-            continue;
-        }
-        match &best {
-            None => best = Some((sym_addr, name)),
-            Some((prev_addr, _)) if sym_addr > *prev_addr => {
-                best = Some((sym_addr, name));
-            }
-            _ => {}
-        }
-    }
-
-    best.map(|(_, name)| SymbolInfo {
-        function: demangle(&name),
+fn resolve_via_symbol_index(symbols: &[(u64, String)], file_addr: u64) -> Option<SymbolInfo> {
+    let index = symbols.partition_point(|(address, _)| *address <= file_addr);
+    let (_, name) = symbols.get(index.checked_sub(1)?)?;
+    Some(SymbolInfo {
+        function: demangle(name),
         file: String::new(),
         line: 0,
     })
@@ -413,6 +409,19 @@ mod tests {
     fn test_native_symbolizer_unknown_returns_none() {
         let sym = NativeSymbolizer::new(vec![], &[0x1000u64]);
         assert!(sym.symbolize_frame(0x1000).is_none());
+    }
+
+    #[test]
+    fn test_symbol_index_uses_nearest_preceding_symbol() {
+        let symbols = vec![
+            (0x1000, "first".to_string()),
+            (0x2000, "second".to_string()),
+        ];
+
+        let resolved = resolve_via_symbol_index(&symbols, 0x2008).unwrap();
+
+        assert_eq!(resolved.function, "second");
+        assert!(resolve_via_symbol_index(&symbols, 0x0fff).is_none());
     }
 
     #[test]
