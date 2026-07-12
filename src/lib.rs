@@ -18,7 +18,8 @@ pub use processes::{ProcessInfo, list_processes, required_helper_arch};
 pub use profile::Profile;
 pub use sampler::{LoadedImage, RawProfile, RawProfileCursor, RawSampleSeries, ThreadFilter};
 pub use stream::{
-    FrameKind, STREAM_HEADER_LEN, SessionHello, SessionPublisher, StreamHeader, StreamProtocolError,
+    DEFAULT_SESSION_PORT, FrameKind, STREAM_HEADER_LEN, SessionHello, SessionPublisher,
+    StreamHeader, StreamProtocolError,
 };
 pub use symbolicate::{FrameInfo, NativeSymbolizer, Symbolizer, SymbolizerChain};
 pub use symbolicated::{Sample, StackFrame, SymbolicatedProfile, TreeNode, Unresolved};

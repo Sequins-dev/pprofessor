@@ -6,7 +6,9 @@ struct ContentView: View {
     let coordinator: SessionCoordinator
     @State private var viewModel = ProfileViewModel()
     @State private var showFileImporter = false
+#if !APP_STORE
     @State private var showProcessPicker = false
+#endif
     @State private var selectedSessionID: UUID?
     @Query(sort: \ProfileSession.startedAt, order: .reverse) private var sessions: [ProfileSession]
 
@@ -27,11 +29,18 @@ struct ContentView: View {
             mainContent
         }
         .toolbar {
+#if APP_STORE
+            ProfileToolbar(
+                viewModel: viewModel,
+                onOpenFile: { showFileImporter = true }
+            )
+#else
             ProfileToolbar(
                 viewModel: viewModel,
                 onOpenFile: { showFileImporter = true },
                 onAttach: { showProcessPicker = true }
             )
+#endif
         }
         .frame(minWidth: 800, minHeight: 500)
         .task { coordinator.start() }
@@ -39,12 +48,14 @@ struct ContentView: View {
             guard let id, let session = sessions.first(where: { $0.id == id }) else { return }
             coordinator.select(session, viewModel: viewModel)
         }
+#if !APP_STORE
         .sheet(isPresented: $showProcessPicker) {
             ProcessPickerView { process in
                 do { try coordinator.launchAttach(process: process) }
                 catch { coordinator.lastError = error.localizedDescription }
             }
         }
+#endif
         .alert(
             "PProfessor Error",
             isPresented: Binding(
@@ -80,7 +91,9 @@ struct ContentView: View {
         }
         .tag(session.id)
         .contextMenu {
+#if !APP_STORE
             if session.status == .live { Button("Stop") { coordinator.stopCapture(session) } }
+#endif
             Button("Delete", role: .destructive) { coordinator.delete(session) }
         }
     }

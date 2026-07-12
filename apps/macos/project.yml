@@ -1,6 +1,6 @@
 name: PProfessor
 options:
-  bundleIdPrefix: com.pprofessor
+  bundleIdPrefix: dev.sequins
   deploymentTarget:
     macOS: "15.0"
   xcodeVersion: "16.0"
@@ -17,8 +17,8 @@ packages:
   PProfessorKit:
     path: .
 
-targets:
-  PProfessor:
+targetTemplates:
+  PProfessorApp:
     type: application
     platform: macOS
     sources:
@@ -27,12 +27,6 @@ targets:
           - "**/*.xcassets"
       - path: Sources/PProfessor/Assets.xcassets
         type: folder
-      - path: ../../target/cli-helper/pprofessor
-        name: pprofessor
-        buildPhase:
-          copyFiles:
-            destination: wrapper
-            subpath: Contents/Helpers
     resources:
       - path: Sources/PProfessor/Assets.xcassets
       - path: Sources/PProfessor/AppIcon.icns
@@ -43,7 +37,6 @@ targets:
       - sdk: AppKit.framework
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.pprofessor.app
         PRODUCT_NAME: PProfessor
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         COMBINE_HIDPI_IMAGES: true
@@ -59,10 +52,42 @@ targets:
         LSApplicationCategoryType: public.app-category.developer-tools
         NSSupportsAutomaticTermination: true
         NSSupportsSuddenTermination: true
+
+targets:
+  PProfessor:
+    templates:
+      - PProfessorApp
+    sources:
+      - path: ../../target/cli-helper/pprofessor
+        name: pprofessor
+        buildPhase:
+          copyFiles:
+            destination: wrapper
+            subpath: Contents/Helpers
+    dependencies:
+      - package: PProfessorKit
+        product: PProfessorCaptureSupport
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.sequins.pprofessor
     entitlements:
       path: Sources/PProfessor/PProfessor.entitlements
       properties:
         com.apple.security.app-sandbox: false
+
+  PProfessorAppStore:
+    templates:
+      - PProfessorApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.sequins.pprofessor
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) APP_STORE"
+    entitlements:
+      path: Sources/PProfessor/PProfessorAppStore.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.files.user-selected.read-only: true
+        com.apple.security.network.server: true
 
   PProfessorKitTests:
     type: bundle.unit-test
@@ -74,7 +99,7 @@ targets:
         product: PProfessorKit
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.pprofessor.tests
+        PRODUCT_BUNDLE_IDENTIFIER: dev.sequins.pprofessor.tests
         GENERATE_INFOPLIST_FILE: true
 
 schemes:
@@ -89,6 +114,19 @@ schemes:
       config: Debug
       targets:
         - PProfessorKitTests
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
+  PProfessorAppStore:
+    build:
+      targets:
+        PProfessorAppStore: all
+    run:
+      config: Debug
+      executable: PProfessorAppStore
     profile:
       config: Release
     analyze:

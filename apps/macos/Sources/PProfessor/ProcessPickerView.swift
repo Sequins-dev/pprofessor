@@ -1,5 +1,6 @@
+#if !APP_STORE
 import Foundation
-import PProfessorKit
+import PProfessorCaptureSupport
 import SwiftUI
 
 struct ProcessPickerView: View {
@@ -100,3 +101,4 @@ enum ProcessListLoader {
         }.value
     }
 }
+#endif

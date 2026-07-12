@@ -11,5 +11,7 @@ profile.pb.md
 *.tar.gz
 *.sha256
 apps/macos/.build/
+apps/macos/build/
 apps/macos/*.xcodeproj
 apps/macos/*.xcworkspace
+.asc/

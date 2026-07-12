@@ -2,7 +2,7 @@ use pprofessor::{FrameKind, STREAM_HEADER_LEN, SessionHello, SessionPublisher, S
 use pprofessor::{RawProfile, RawProfileCursor, RawSampleSeries};
 use std::collections::HashMap;
 use std::io::Read;
-use std::os::unix::net::UnixListener;
+use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::time::Instant;
 
 #[test]
@@ -81,12 +81,8 @@ fn raw_sample_series_supports_untimed_aggregates() {
 
 #[test]
 fn publisher_sends_hello_before_profile_data() {
-    let path = std::env::temp_dir().join(format!(
-        "pprofessor-stream-test-{}.sock",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_file(&path);
-    let listener = UnixListener::bind(&path).unwrap();
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let address = listener.local_addr().unwrap();
     let reader = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         let mut header = [0u8; STREAM_HEADER_LEN];
@@ -100,7 +96,7 @@ fn publisher_sends_hello_before_profile_data() {
     });
 
     let mut publisher = SessionPublisher::new(
-        path.clone(),
+        address,
         SessionHello::new("session-1", "attach", 42, "target", 99),
     );
     assert!(publisher.send(FrameKind::ProfileDelta, b"profile").unwrap());
@@ -108,5 +104,12 @@ fn publisher_sends_hello_before_profile_data() {
         reader.join().unwrap(),
         (FrameKind::Hello, FrameKind::ProfileDelta)
     );
-    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn default_publisher_address_is_ipv4_loopback() {
+    assert_eq!(
+        SessionPublisher::default_address(),
+        SocketAddr::from((Ipv4Addr::LOCALHOST, 57557))
+    );
 }

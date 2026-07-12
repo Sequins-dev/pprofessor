@@ -2,6 +2,9 @@ import Foundation
 import Observation
 import PProfessorKit
 import SwiftData
+#if !APP_STORE
+import PProfessorCaptureSupport
+#endif
 
 private struct SessionHelloPayload: Decodable {
     let sessionId: String
@@ -22,11 +25,13 @@ final class SessionCoordinator {
     private let sessionStore: ProfileSessionStore
     private var modelContext: ModelContext { sessionStore.context }
     private let storageRoot: URL
-    private var server: UnixSessionServer?
+    private var server: TCPSessionServer?
     private var connectionSessions: [UUID: UUID] = [:]
     private var runtimes: [UUID: RuntimeSession] = [:]
+#if !APP_STORE
     private var launchedProcesses: [UUID: Process] = [:]
     private var sessionOutputs: [UUID: URL] = [:]
+#endif
 
     var selectedSessionID: UUID?
     var onSelectedProfile: ((DecodedProfile) -> Void)?
@@ -43,8 +48,7 @@ final class SessionCoordinator {
         guard server == nil else { return }
         do {
             try FileManager.default.createDirectory(at: storageRoot, withIntermediateDirectories: true)
-            let socketPath = FileManager.default.temporaryDirectory.appendingPathComponent("pprofessor-v1.sock").path
-            let server = UnixSessionServer(path: socketPath) { [weak self] connectionID, frame in
+            let server = TCPSessionServer { [weak self] connectionID, frame in
                 Task { @MainActor in self?.receive(connectionID: connectionID, frame: frame) }
             }
             try server.start()
@@ -84,6 +88,12 @@ final class SessionCoordinator {
 
     func importProfile(url: URL, viewModel: ProfileViewModel) async {
         let id = UUID()
+        let accessedSecurityScopedResource = url.startAccessingSecurityScopedResource()
+        defer {
+            if accessedSecurityScopedResource {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
         do {
             let directory = try sessionDirectory(id: id)
             let destination = directory.appendingPathComponent("profile.pb.gz")
@@ -107,14 +117,18 @@ final class SessionCoordinator {
     }
 
     func delete(_ session: ProfileSession) {
+#if !APP_STORE
         if session.status == .live { stopCapture(session) }
+#endif
         do {
             try sessionStore.delete(session)
             try? FileManager.default.removeItem(
                 at: storageRoot.appendingPathComponent(session.id.uuidString, isDirectory: true)
             )
             runtimes.removeValue(forKey: session.id)
+#if !APP_STORE
             launchedProcesses.removeValue(forKey: session.id)
+#endif
             connectionSessions = connectionSessions.filter { $0.value != session.id }
             if selectedSessionID == session.id { selectedSessionID = nil }
         } catch {
@@ -122,6 +136,7 @@ final class SessionCoordinator {
         }
     }
 
+#if !APP_STORE
     func stopCapture(_ session: ProfileSession) {
         launchedProcesses[session.id]?.interrupt()
     }
@@ -175,6 +190,7 @@ final class SessionCoordinator {
         launchedProcesses[id] = processTask
         sessionOutputs[id] = output
     }
+#endif
 
     private func receive(connectionID: UUID, frame: SessionFrame) {
         if frame.header.kind == .hello {
@@ -275,9 +291,11 @@ final class SessionCoordinator {
             session.endedAt = Date()
             session.updatedAt = Date()
             try modelContext.save()
+#if !APP_STORE
             if let output = sessionOutputs.removeValue(forKey: session.id) {
                 try? FileManager.default.removeItem(at: output)
             }
+#endif
             if selectedSessionID == session.id {
                 onSelectedArtifact?(destination)
             }
@@ -347,6 +365,7 @@ final class SessionCoordinator {
         }
     }
 
+#if !APP_STORE
     private func captureTerminated(id: UUID, status: Int32, message: String?) {
         launchedProcesses.removeValue(forKey: id)
         guard let session = fetchSession(id: id),
@@ -367,4 +386,5 @@ final class SessionCoordinator {
             try? modelContext.save()
         }
     }
+#endif
 }

@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import PProfessorKit
+@testable import PProfessorCaptureSupport
 
 @Suite("Attach process metadata")
 struct AttachProcessInfoTests {

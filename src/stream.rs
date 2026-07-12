@@ -1,12 +1,12 @@
 use std::fmt;
 use std::io::Write;
-use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 pub const STREAM_HEADER_LEN: usize = 28;
+pub const DEFAULT_SESSION_PORT: u16 = 57_557;
 const MAGIC: &[u8; 4] = b"PPRS";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,17 +124,17 @@ impl SessionHello {
 }
 
 pub struct SessionPublisher {
-    socket_path: PathBuf,
+    address: SocketAddr,
     hello: SessionHello,
-    stream: Option<UnixStream>,
+    stream: Option<TcpStream>,
     sequence: u64,
     just_connected: bool,
 }
 
 impl SessionPublisher {
-    pub fn new(socket_path: PathBuf, hello: SessionHello) -> Self {
+    pub fn new(address: SocketAddr, hello: SessionHello) -> Self {
         Self {
-            socket_path,
+            address,
             hello,
             stream: None,
             sequence: 0,
@@ -142,8 +142,8 @@ impl SessionPublisher {
         }
     }
 
-    pub fn default_socket_path() -> PathBuf {
-        std::env::temp_dir().join("pprofessor-v1.sock")
+    pub fn default_address() -> SocketAddr {
+        SocketAddr::from((Ipv4Addr::LOCALHOST, DEFAULT_SESSION_PORT))
     }
 
     pub fn take_just_connected(&mut self) -> bool {
@@ -182,12 +182,13 @@ impl SessionPublisher {
     }
 
     fn connect(&mut self) -> std::io::Result<bool> {
-        let mut stream = match UnixStream::connect(&self.socket_path) {
+        let mut stream = match TcpStream::connect_timeout(&self.address, Duration::from_millis(100))
+        {
             Ok(stream) => stream,
             Err(error)
                 if matches!(
                     error.kind(),
-                    std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                    std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::TimedOut
                 ) =>
             {
                 return Ok(false);
@@ -195,6 +196,7 @@ impl SessionPublisher {
             Err(error) => return Err(error),
         };
         stream.set_write_timeout(Some(Duration::from_millis(100)))?;
+        stream.set_nodelay(true)?;
         let hello = serde_json::to_vec(&self.hello).map_err(std::io::Error::other)?;
         self.sequence = self.sequence.saturating_add(1);
         Self::write_frame(&mut stream, FrameKind::Hello, self.sequence, &hello)?;
@@ -204,7 +206,7 @@ impl SessionPublisher {
     }
 
     fn write_frame(
-        stream: &mut UnixStream,
+        stream: &mut TcpStream,
         kind: FrameKind,
         sequence: u64,
         payload: &[u8],

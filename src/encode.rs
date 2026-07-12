@@ -11,10 +11,10 @@ use crate::symbolicated::SymbolicatedProfile;
 pub fn build_proto(profile: &SymbolicatedProfile) -> Bytes {
     let mut enc = ProfileEncoder::new();
 
-    // Value types: samples/count
+    // Value types: samples/count and aggregate sampled thread wall time.
     let s_samples = enc.strings.intern("samples");
     let s_count = enc.strings.intern("count");
-    let s_cpu = enc.strings.intern("cpu");
+    let s_wall = enc.strings.intern("wall");
     let s_nanoseconds = enc.strings.intern("nanoseconds");
     let s_thread_id = enc.strings.intern("thread_id");
     let s_thread_name = enc.strings.intern("thread_name");
@@ -25,10 +25,14 @@ pub fn build_proto(profile: &SymbolicatedProfile) -> Bytes {
         r#type: s_samples,
         unit: s_count,
     });
+    enc.value_types.push(ValueType {
+        r#type: s_wall,
+        unit: s_nanoseconds,
+    });
 
     let period_ns = 1_000_000_000i64 / profile.freq_hz as i64;
     enc.period_type = ValueType {
-        r#type: s_cpu,
+        r#type: s_wall,
         unit: s_nanoseconds,
     };
     enc.period = period_ns;
@@ -142,9 +146,10 @@ pub fn build_proto(profile: &SymbolicatedProfile) -> Bytes {
             });
         }
 
+        let count = sample.count.min(i64::MAX as u64) as i64;
         enc.samples.push(Sample {
             location_ids,
-            values: vec![sample.count as i64],
+            values: vec![count, count.saturating_mul(period_ns)],
             labels,
         });
     }
@@ -158,6 +163,53 @@ mod tests {
     use crate::symbolicated::{Sample, StackFrame, SymbolicatedProfile};
     use std::collections::HashMap;
     use std::time::{Duration, SystemTime};
+
+    fn read_varint(data: &[u8], offset: &mut usize) -> u64 {
+        let mut value = 0u64;
+        let mut shift = 0;
+        loop {
+            let byte = data[*offset];
+            *offset += 1;
+            value |= u64::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                return value;
+            }
+            shift += 7;
+        }
+    }
+
+    fn length_delimited_fields(data: &[u8], wanted_field: u64) -> Vec<&[u8]> {
+        let mut offset = 0;
+        let mut fields = Vec::new();
+        while offset < data.len() {
+            let tag = read_varint(data, &mut offset);
+            let field = tag >> 3;
+            match tag & 0x7 {
+                0 => {
+                    let _ = read_varint(data, &mut offset);
+                }
+                2 => {
+                    let length = read_varint(data, &mut offset) as usize;
+                    let value = &data[offset..offset + length];
+                    if field == wanted_field {
+                        fields.push(value);
+                    }
+                    offset += length;
+                }
+                wire_type => panic!("unsupported protobuf wire type {wire_type}"),
+            }
+        }
+        fields
+    }
+
+    fn packed_int64s(data: &[u8]) -> Vec<i64> {
+        let mut offset = 0;
+        let mut values = Vec::new();
+        while offset < data.len() {
+            values.push(read_varint(data, &mut offset) as i64);
+        }
+        values
+    }
 
     fn dummy_profile() -> SymbolicatedProfile {
         let mut frames = HashMap::new();
@@ -221,5 +273,22 @@ mod tests {
                 .windows(b"nanoseconds".len())
                 .any(|window| window == b"nanoseconds")
         );
+    }
+
+    #[test]
+    fn test_build_proto_includes_wall_time_values() {
+        let proto = build_proto(&dummy_profile());
+        assert!(proto.windows(b"wall".len()).any(|window| window == b"wall"));
+
+        let sample_types = length_delimited_fields(&proto, 1);
+        assert_eq!(sample_types.len(), 2);
+
+        let samples = length_delimited_fields(&proto, 2);
+        assert_eq!(samples.len(), 1);
+        let packed_values = length_delimited_fields(samples[0], 2);
+        assert_eq!(packed_values.len(), 1);
+
+        let period_ns = 1_000_000_000i64 / 99;
+        assert_eq!(packed_int64s(packed_values[0]), vec![5, 5 * period_ns]);
     }
 }
