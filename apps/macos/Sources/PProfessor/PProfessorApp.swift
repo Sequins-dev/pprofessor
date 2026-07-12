@@ -2,6 +2,9 @@ import AppKit
 import SwiftUI
 import PProfessorKit
 import SwiftData
+#if !APP_STORE
+import PProfessorCaptureSupport
+#endif
 
 @main
 struct PProfessorApp: App {
@@ -30,14 +33,17 @@ struct PProfessorApp: App {
         .modelContainer(modelContainer)
         .commands {
             CommandGroup(replacing: .newItem) {}
+#if !APP_STORE
             CommandMenu("Tools") {
                 Button("Install CLI tools") {
                     installCLITools()
                 }
             }
+#endif
         }
     }
 
+#if !APP_STORE
     private func installCLITools() {
         do {
             let result = try CLIInstaller().install()
@@ -71,4 +77,5 @@ struct PProfessorApp: App {
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }
+#endif
 }

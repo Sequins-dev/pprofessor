@@ -3,7 +3,9 @@ import SwiftUI
 struct ProfileToolbar: ToolbarContent {
     @Bindable var viewModel: ProfileViewModel
     let onOpenFile: () -> Void
+#if !APP_STORE
     let onAttach: () -> Void
+#endif
 
     var body: some ToolbarContent {
         ToolbarItemGroup(placement: .navigation) {
@@ -12,10 +14,12 @@ struct ProfileToolbar: ToolbarContent {
             }
             .help("Open a pprof profile")
 
+#if !APP_STORE
             Button(action: onAttach) {
                 Label("Attach", systemImage: "scope")
             }
             .help("Attach to a live process")
+#endif
 
             Picker("Sample Type", selection: $viewModel.selectedValueTypeIndex) {
                 if viewModel.availableValueTypes.isEmpty {

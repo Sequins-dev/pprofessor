@@ -177,7 +177,7 @@ fn run_command(
     let profile = handle.start()?;
     let mut publisher = publish.then(|| {
         pprofessor::SessionPublisher::new(
-            pprofessor::SessionPublisher::default_socket_path(),
+            pprofessor::SessionPublisher::default_address(),
             pprofessor::SessionHello::new(
                 session_id(handle.pid()),
                 "run",
@@ -353,7 +353,7 @@ fn attach_command(options: AttachOptions) -> Result<()> {
         .unwrap_or_else(|| pid.to_string());
     let mut publisher = publish.then(|| {
         pprofessor::SessionPublisher::new(
-            pprofessor::SessionPublisher::default_socket_path(),
+            pprofessor::SessionPublisher::default_address(),
             pprofessor::SessionHello::new(
                 requested_session_id.unwrap_or_else(|| session_id(pid)),
                 "attach",

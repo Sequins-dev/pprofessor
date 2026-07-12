@@ -14,6 +14,13 @@ A native macOS CPU sampling profiler that outputs gzip-compressed [pprof](https:
 swift build -c release
 ```
 
+The repository root also provides two app variants:
+
+```sh
+make build-app-release  # GitHub build with attach UI and bundled CLI
+make build-app-store    # sandboxed viewer without attach UI or bundled CLI
+```
+
 ## Usage
 
 ```sh
@@ -26,6 +33,8 @@ sudo pprofessor attach 12345
 # View profile
 go tool pprof -http=:8080 profile.pb.gz
 ```
+
+While the app is running, CLI captures publish live profile updates to its loopback-only TCP listener at `127.0.0.1:57557`. The App Store viewer supports these incoming sessions even though capture and attachment are distributed separately.
 
 ## Options
 

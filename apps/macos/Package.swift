@@ -7,6 +7,7 @@ let package = Package(
     platforms: [.macOS(.v15)],
     products: [
         .library(name: "PProfessorKit", targets: ["PProfessorKit"]),
+        .library(name: "PProfessorCaptureSupport", targets: ["PProfessorCaptureSupport"]),
     ],
     targets: [
         .target(
@@ -14,9 +15,13 @@ let package = Package(
             path: "Sources/PProfessorKit",
             linkerSettings: [.linkedLibrary("z")]
         ),
+        .target(
+            name: "PProfessorCaptureSupport",
+            path: "Sources/PProfessorCaptureSupport"
+        ),
         .testTarget(
             name: "PProfessorKitTests",
-            dependencies: ["PProfessorKit"],
+            dependencies: ["PProfessorKit", "PProfessorCaptureSupport"],
             path: "Tests/PProfessorKitTests"
         ),
     ]

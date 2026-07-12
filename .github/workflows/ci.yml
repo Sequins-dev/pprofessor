@@ -53,6 +53,9 @@ jobs:
       - name: Install dependencies
         run: brew install xcodegen
 
+      - name: Validate App Store release tasks
+        run: bash tests/app_store_release_tasks.sh
+
       - name: Swift build
         working-directory: apps/macos
         run: xcrun swift build
@@ -69,3 +72,12 @@ jobs:
         run: |
           APP_PATH="$(xcodebuild -scheme PProfessor -configuration Debug -showBuildSettings 2>/dev/null | awk -F'= ' '/ BUILT_PRODUCTS_DIR = / { print $2; exit }')/PProfessor.app"
           test -x "$APP_PATH/Contents/Helpers/pprofessor"
+
+      - name: Build App Store viewer without CLI helper
+        working-directory: apps/macos
+        run: |
+          xcodebuild -scheme PProfessorAppStore -configuration Release -derivedDataPath "$RUNNER_TEMP/PProfessorAppStoreDerivedData" CODE_SIGNING_ALLOWED=NO build
+          APP_PATH="$RUNNER_TEMP/PProfessorAppStoreDerivedData/Build/Products/Release/PProfessor.app"
+          test -d "$APP_PATH"
+          test ! -e "$APP_PATH/Contents/Helpers/pprofessor"
+          ! strings "$APP_PATH/Contents/MacOS/PProfessor" | grep -E "AttachProcessInfo|CLIInstaller|launchAttach|task_for_pid"

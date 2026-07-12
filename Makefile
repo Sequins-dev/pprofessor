@@ -1,4 +1,4 @@
-.PHONY: build build-release test clean rust-build rust-release rust-test rust-lint rust-fmt swift-build swift-test generate build-app build-app-release run-app cli-helper cli-helper-universal sign-cli-helper install
+.PHONY: build build-release test clean rust-build rust-release rust-test rust-lint rust-fmt swift-build swift-test generate build-app build-app-release build-app-store run-app cli-helper cli-helper-universal sign-cli-helper install app-store-archive app-store-export app-store-upload app-store-wait app-store-build-info app-store-submit test-app-store-release-tasks
 
 CLI_NAME := pprofessor
 CLI_HELPER_DIR := target/cli-helper
@@ -49,6 +49,15 @@ build-app:
 
 build-app-release:
 	$(MAKE) -C apps/macos build-app-release
+
+build-app-store:
+	$(MAKE) -C apps/macos build-app-store
+
+app-store-archive app-store-export app-store-upload app-store-wait app-store-build-info app-store-submit:
+	$(MAKE) -C apps/macos $@
+
+test-app-store-release-tasks:
+	bash tests/app_store_release_tasks.sh
 
 run-app:
 	$(MAKE) -C apps/macos run-app
