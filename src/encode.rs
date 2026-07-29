@@ -64,6 +64,7 @@ pub fn build_proto(profile: &SymbolicatedProfile) -> Bytes {
             file_offset: 0,
             filename,
             build_id: 0,
+            ..Mapping::default()
         });
     }
 
@@ -102,7 +103,9 @@ pub fn build_proto(profile: &SymbolicatedProfile) -> Bytes {
                     lines: vec![Line {
                         function_id: func_id,
                         line: frame.line as i64,
+                        ..Line::default()
                     }],
+                    ..Location::default()
                 });
                 lid
             });

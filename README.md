@@ -61,9 +61,62 @@ make cli-helper-universal
 pprofessor run --output profile.pb.gz ./my-app
 sudo pprofessor attach --output profile.pb.gz 12345
 pprofessor processes
+pprofessor analyze profile.pb.gz
 ```
 
 The CLI uses macOS `task_for_pid`, so profiling another process requires root or a trusted signature with the debugger entitlement.
+
+### Terminal and Markdown analysis
+
+`analyze` reads raw or gzip-compressed pprof protobuf files and highlights the
+work that accounts for the most measured cost. The default `summary` combines
+profile metadata, concise hotspot observations, flat and cumulative frame
+costs, and the highest-cost complete stacks:
+
+```sh
+pprofessor analyze profile.pb.gz
+```
+
+Focused views make it easier to explore a profile without opening the app:
+
+```sh
+# Self/flat cost by function, with terminal hotness bars
+pprofessor analyze profile.pb.gz --view top --limit 20
+
+# Functions ranked by cumulative cost
+pprofessor analyze profile.pb.gz --view cumulative
+
+# Complete root-to-leaf stacks
+pprofessor analyze profile.pb.gz --view stacks
+
+# A filtered root-to-leaf call tree
+pprofessor analyze profile.pb.gz --view tree --min-percent 2
+```
+
+Markdown output is structured for LLM context, issue reports, and documents:
+
+```sh
+pprofessor analyze profile.pb.gz \
+  --format markdown \
+  --output hotspots.md
+```
+
+Use `--sample-type NAME` (or a zero-based sample type index) to inspect a
+specific metric. Without it, PProfessor follows pprof selection semantics:
+`default_sample_type` when present, otherwise the last sample type. `report` is
+an alias for `analyze`.
+
+The Rust library exposes the same reversible representation used by the CLI:
+
+```rust
+let profile = pprofessor::PprofProfile::decode(&protobuf_bytes)?;
+let json = serde_json::to_string_pretty(&profile)?;
+let protobuf_bytes = profile.encode();
+let report = pprofessor::report::ProfileReport::from_profile(&profile, None)?;
+```
+
+`PprofProfile` implements Serde's `Serialize` and `Deserialize` traits.
+`ProfileEncoder` remains available as a compatibility alias.
 
 When PProfessor.app is open, CLI `run` and `attach` sessions are discovered automatically and stream continuously symbolized pprof deltas to the app over loopback TCP at `127.0.0.1:57557`. The listener is never exposed to the network. The final gzip profile is retained by the app alongside its session metadata. Pass `--no-publish` to keep a capture CLI-only.
 

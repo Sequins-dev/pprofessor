@@ -5,6 +5,7 @@ pub mod pprof;
 #[cfg(target_os = "macos")]
 pub mod processes;
 pub mod profile;
+pub mod report;
 pub mod sampler;
 pub mod stream;
 pub mod symbolicate;
@@ -12,7 +13,7 @@ pub mod symbolicated;
 
 pub use builder::ProfilerBuilder;
 pub use handle::ProfilerHandle;
-pub use pprof::ProfileEncoder;
+pub use pprof::{PprofProfile, ProfileEncoder};
 #[cfg(target_os = "macos")]
 pub use processes::{ProcessInfo, list_processes, required_helper_arch};
 pub use profile::Profile;

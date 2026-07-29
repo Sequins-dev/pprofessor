@@ -11,7 +11,7 @@ use flate2::Compression;
 use flate2::write::GzEncoder;
 use nix::sys::signal::{self, SaFlags, SigAction, SigSet, Signal};
 
-use cli::{Cli, Command};
+use cli::{AnalyzeFormat, AnalyzeView, Cli, Command};
 
 // ---------------------------------------------------------------------------
 // Global signal state
@@ -402,6 +402,48 @@ fn attach_command(options: AttachOptions) -> Result<()> {
     Ok(())
 }
 
+fn analyze_command(
+    input: std::path::PathBuf,
+    view: AnalyzeView,
+    format: AnalyzeFormat,
+    sample_type: Option<String>,
+    limit: usize,
+    min_percent: f64,
+    output: Option<std::path::PathBuf>,
+) -> Result<()> {
+    if output.as_ref() == Some(&input) {
+        anyhow::bail!("analysis output must not overwrite the input profile");
+    }
+    let data = std::fs::read(&input)
+        .with_context(|| format!("reading pprof profile {}", input.display()))?;
+    let report = pprofessor::report::ProfileReport::from_pprof(&data, sample_type.as_deref())?;
+    let view = match view {
+        AnalyzeView::Summary => pprofessor::report::ReportView::Summary,
+        AnalyzeView::Top => pprofessor::report::ReportView::TopFrames,
+        AnalyzeView::Cumulative => pprofessor::report::ReportView::TopCumulative,
+        AnalyzeView::Stacks => pprofessor::report::ReportView::TopStacks,
+        AnalyzeView::Tree => pprofessor::report::ReportView::CallTree,
+    };
+    let format = match format {
+        AnalyzeFormat::Terminal => pprofessor::report::ReportFormat::Terminal,
+        AnalyzeFormat::Markdown => pprofessor::report::ReportFormat::Markdown,
+    };
+    let rendered = report.render(&pprofessor::report::RenderOptions {
+        view,
+        format,
+        limit,
+        min_percent,
+    });
+
+    if let Some(output) = output {
+        std::fs::write(&output, rendered)
+            .with_context(|| format!("writing analysis report {}", output.display()))?;
+    } else {
+        print!("{rendered}");
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -473,6 +515,15 @@ fn main() {
                 Err(error) => Err(error),
             }
         }
+        Command::Analyze {
+            input,
+            view,
+            format,
+            sample_type,
+            limit,
+            min_percent,
+            output,
+        } => analyze_command(input, view, format, sample_type, limit, min_percent, output),
     };
 
     if let Err(e) = result {
