@@ -53,6 +53,9 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 
+      - name: Allow per-process perf events
+        run: sudo sysctl kernel.perf_event_paranoid=2
+
       - name: Run tests
         run: cargo test -- --test-threads=1
 
