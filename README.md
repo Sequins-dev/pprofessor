@@ -124,8 +124,8 @@ let report = pprofessor::report::ProfileReport::from_profile(&profile, None)?;
 
 ## Rust API
 
-Linux supports profiling the current process and profiling a closure in
-addition to the CLI workflows:
+On both macOS and Linux, the Rust API supports profiling the current process
+and profiling a closure in addition to the CLI workflows:
 
 ```rust
 let mut handle = pprofessor::builder().freq(99).current()?;
@@ -136,9 +136,10 @@ let profile = session.stop()?;
 let (result, profile) = pprofessor::builder().profile(|| run_workload())?;
 ```
 
-In-process Linux profiling uses per-thread `perf_event_open` software
-CPU-clock events. It normally works without elevated privileges, but follows
-the host's `perf_event_paranoid` and `CAP_PERFMON` policy.
+On macOS, in-process profiling uses Mach task and thread APIs and requires no
+special permissions. On Linux, it uses per-thread `perf_event_open` software
+CPU-clock events. Linux profiling normally works without elevated privileges,
+but follows the host's `perf_event_paranoid` and `CAP_PERFMON` policy.
 
 When PProfessor.app is open, CLI `run` and `attach` sessions are discovered automatically and stream continuously symbolized pprof deltas to the app over loopback TCP at `127.0.0.1:57557`. The listener is never exposed to the network. The final gzip profile is retained by the app alongside its session metadata. Pass `--no-publish` to keep a capture CLI-only.
 
