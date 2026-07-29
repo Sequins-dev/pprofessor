@@ -9,7 +9,8 @@ use crate::sampler::{PlatformSampler, ThreadFilter};
 use crate::symbolicate::Symbolizer;
 use crate::symbolicated::{SymbolicatedProfile, Unresolved};
 
-// Mach FFI needed for the closure profiler.
+// Mach FFI needed for the macOS closure profiler.
+#[cfg(target_os = "macos")]
 unsafe extern "C" {
     fn mach_thread_self() -> u32;
     fn mach_task_self() -> u32;
@@ -107,6 +108,7 @@ impl ProfilerBuilder {
     }
 
     /// Only sample the thread with this Mach thread port (internal use).
+    #[cfg(target_os = "macos")]
     fn thread_mach_port(mut self, port: u32) -> Self {
         self.thread_filter = ThreadFilter::ByMachThread(port);
         self
@@ -133,7 +135,9 @@ impl ProfilerBuilder {
 
     /// Spawn a child process and attach a profiler to it.
     ///
-    /// Requires root or the `com.apple.security.cs.debugger` entitlement.
+    /// On macOS this requires root or the
+    /// `com.apple.security.cs.debugger` entitlement. On Linux, normal
+    /// `ptrace` access rules apply.
     pub fn spawn(
         self,
         binary: impl AsRef<OsStr>,
@@ -157,7 +161,9 @@ impl ProfilerBuilder {
 
     /// Attach a profiler to an already-running process by PID.
     ///
-    /// Requires root or the `com.apple.security.cs.debugger` entitlement.
+    /// On macOS this requires root or the
+    /// `com.apple.security.cs.debugger` entitlement. On Linux, normal
+    /// `ptrace` access rules apply.
     pub fn attach(self, pid: u32) -> Result<ProfilerHandle> {
         let mut sampler = PlatformSampler::new(pid, self.freq_hz)?;
         sampler.thread_filter = self.thread_filter;
@@ -194,6 +200,7 @@ impl ProfilerBuilder {
     /// pprof protobuf bytes.
     ///
     /// No special permissions are required (uses `mach_task_self`).
+    #[cfg(target_os = "macos")]
     pub fn profile<T>(self, f: impl FnOnce() -> T) -> Result<(T, SymbolicatedProfile)> {
         // Capture the Mach send-right for the calling thread so the sampler
         // can filter to exactly this thread.
@@ -210,6 +217,12 @@ impl ProfilerBuilder {
         unsafe { mach_port_deallocate(mach_task_self(), calling_thread) };
 
         Ok((result, data))
+    }
+
+    /// Closure profiling is not part of the Linux CLI support yet.
+    #[cfg(target_os = "linux")]
+    pub fn profile<T>(self, _f: impl FnOnce() -> T) -> Result<(T, SymbolicatedProfile)> {
+        anyhow::bail!("in-process closure profiling is not supported on Linux")
     }
 }
 

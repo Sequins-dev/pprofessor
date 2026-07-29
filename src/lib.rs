@@ -2,7 +2,7 @@ pub mod builder;
 pub(crate) mod encode;
 pub mod handle;
 pub mod pprof;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod processes;
 pub mod profile;
 pub mod report;
@@ -14,7 +14,7 @@ pub mod symbolicated;
 pub use builder::ProfilerBuilder;
 pub use handle::ProfilerHandle;
 pub use pprof::{PprofProfile, ProfileEncoder};
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use processes::{ProcessInfo, list_processes, required_helper_arch};
 pub use profile::Profile;
 pub use sampler::{LoadedImage, RawProfile, RawProfileCursor, RawSampleSeries, ThreadFilter};

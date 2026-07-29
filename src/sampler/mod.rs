@@ -121,3 +121,9 @@ pub mod macos;
 
 #[cfg(target_os = "macos")]
 pub use macos::MacosSampler as PlatformSampler;
+
+#[cfg(target_os = "linux")]
+pub mod linux;
+
+#[cfg(target_os = "linux")]
+pub use linux::LinuxSampler as PlatformSampler;

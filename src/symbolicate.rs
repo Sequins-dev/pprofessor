@@ -381,8 +381,22 @@ fn resolve_via_symbol_index(symbols: &[(u64, String)], file_addr: u64) -> Option
     })
 }
 
+#[cfg(target_os = "macos")]
 fn demangle(name: &str) -> String {
     symbolic_demangle::demangle(name).to_string()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn demangle(name: &str) -> String {
+    if let Ok(symbol) = rustc_demangle::try_demangle(name) {
+        return symbol.to_string();
+    }
+    if let Ok(symbol) = cpp_demangle::Symbol::new(name) {
+        return symbol
+            .demangle(&cpp_demangle::DemangleOptions::default())
+            .unwrap_or_else(|_| name.to_string());
+    }
+    name.to_string()
 }
 
 #[cfg(test)]
@@ -459,6 +473,7 @@ mod tests {
         assert!(symbolizer.symbolize_frame(runtime_address).is_some());
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn test_native_symbolizer_resolves_universal_dyld_image() {
         let path = "/usr/lib/dyld";

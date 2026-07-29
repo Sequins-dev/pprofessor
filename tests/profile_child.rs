@@ -7,16 +7,15 @@ use std::time::Duration;
 
 /// Build the busy_loop fixture binary and return its path.
 fn build_fixture() -> PathBuf {
+    let fixture = target_debug_path("busy_loop_fixture");
+    std::fs::create_dir_all(fixture.parent().unwrap()).unwrap();
     let status = Command::new("rustc")
-        .args([
-            "tests/fixtures/busy_loop.rs",
-            "-o",
-            "target/debug/busy_loop_fixture",
-        ])
+        .args(["tests/fixtures/busy_loop.rs", "-o"])
+        .arg(&fixture)
         .status()
         .expect("rustc not found");
     assert!(status.success(), "failed to compile busy_loop fixture");
-    PathBuf::from("target/debug/busy_loop_fixture")
+    fixture
 }
 
 /// Build the pprofessor binary (debug mode) and return its path.
@@ -26,7 +25,15 @@ fn build_pprofessor() -> PathBuf {
         .status()
         .expect("cargo not found");
     assert!(status.success(), "failed to build pprofessor");
-    PathBuf::from("target/debug/pprofessor")
+    target_debug_path("pprofessor")
+}
+
+fn target_debug_path(name: &str) -> PathBuf {
+    std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("target"))
+        .join("debug")
+        .join(name)
 }
 
 /// Returns true if we have the privileges needed for task_for_pid.
@@ -34,6 +41,7 @@ fn build_pprofessor() -> PathBuf {
 /// Authoritative check: spawn a trivial child and try task_for_pid on it.
 /// Getting your own task port always succeeds, so self-probing is not useful.
 /// Ad-hoc signing is not trusted by SIP, so only root reliably works.
+#[cfg(target_os = "macos")]
 fn has_task_for_pid_permission() -> bool {
     #[link(name = "System")]
     unsafe extern "C" {
@@ -51,6 +59,11 @@ fn has_task_for_pid_permission() -> bool {
     let kr = unsafe { task_for_pid(mach_task_self(), pid, &mut task) };
     unsafe { libc::kill(pid, libc::SIGKILL) };
     kr == 0 // KERN_SUCCESS
+}
+
+#[cfg(target_os = "linux")]
+fn has_task_for_pid_permission() -> bool {
+    true
 }
 
 /// Verify the buffer is a valid gzip stream containing a non-empty pprof protobuf.
@@ -74,6 +87,7 @@ fn assert_valid_pprof(bytes: &[u8]) {
 }
 
 /// Do a small amount of CPU work to ensure at least a few samples are taken.
+#[cfg(target_os = "macos")]
 fn do_cpu_work() {
     let mut x: u64 = 0;
     for i in 0..10_000_000u64 {
@@ -153,6 +167,11 @@ fn test_library_spawn_produces_valid_protobuf() {
     }
 
     let symbolicated = profile.stop().expect("failed to stop profile");
+    #[cfg(target_os = "linux")]
+    assert!(
+        !symbolicated.samples.is_empty(),
+        "Linux sampler collected no child-process samples"
+    );
     assert_valid_pprof(&symbolicated.to_pprof());
 }
 
@@ -160,6 +179,7 @@ fn test_library_spawn_produces_valid_protobuf() {
 // Library API test — current() self-profile (no permissions needed)
 // ---------------------------------------------------------------------------
 
+#[cfg(target_os = "macos")]
 #[test]
 fn test_library_current_produces_valid_protobuf() {
     let mut handle = pprofessor::builder()
@@ -180,6 +200,7 @@ fn test_library_current_produces_valid_protobuf() {
 // SymbolicatedProfile fields
 // ---------------------------------------------------------------------------
 
+#[cfg(target_os = "macos")]
 #[test]
 fn test_symbolicated_profile_has_samples_and_duration() {
     let mut handle = pprofessor::builder()
@@ -216,6 +237,7 @@ fn test_symbolicated_profile_has_samples_and_duration() {
 // stop_unsymbolicated — frames should have hex function names
 // ---------------------------------------------------------------------------
 
+#[cfg(target_os = "macos")]
 #[test]
 fn test_stop_unsymbolicated_has_hex_functions() {
     let mut handle = pprofessor::builder()
@@ -251,6 +273,7 @@ fn test_stop_unsymbolicated_has_hex_functions() {
 // Closure profiler
 // ---------------------------------------------------------------------------
 
+#[cfg(target_os = "macos")]
 #[test]
 fn test_closure_profiler_returns_result_and_profile() {
     let (result, symbolicated) = pprofessor::builder()
@@ -273,6 +296,7 @@ fn test_closure_profiler_returns_result_and_profile() {
 // Duration timeout
 // ---------------------------------------------------------------------------
 
+#[cfg(target_os = "macos")]
 #[test]
 fn test_duration_stops_sampling_automatically() {
     let mut handle = pprofessor::builder()
@@ -310,6 +334,7 @@ fn test_duration_stops_sampling_automatically() {
 // Thread name filter
 // ---------------------------------------------------------------------------
 
+#[cfg(target_os = "macos")]
 #[test]
 fn test_thread_name_filter() {
     use std::sync::{Arc, Barrier};
@@ -359,6 +384,7 @@ fn test_thread_name_filter() {
 // Custom symbolizer — renames all frames
 // ---------------------------------------------------------------------------
 
+#[cfg(target_os = "macos")]
 #[test]
 fn test_custom_symbolizer_renames_frames() {
     use pprofessor::{FrameInfo, Symbolizer};
@@ -404,6 +430,7 @@ fn test_custom_symbolizer_renames_frames() {
 // Symbolizer chain — always-None first, native fallback
 // ---------------------------------------------------------------------------
 
+#[cfg(target_os = "macos")]
 #[test]
 fn test_symbolizer_chain_fallback() {
     use pprofessor::{FrameInfo, Symbolizer, SymbolizerChain};
@@ -443,6 +470,7 @@ fn test_symbolizer_chain_fallback() {
 // Tree view — roots and children
 // ---------------------------------------------------------------------------
 
+#[cfg(target_os = "macos")]
 #[test]
 fn test_tree_view_has_roots() {
     let mut handle = pprofessor::builder()
