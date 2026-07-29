@@ -570,7 +570,20 @@ impl AttachedThread {
     fn attach(tid: libc::pid_t) -> Result<Self> {
         let result = unsafe {
             libc::ptrace(
-                libc::PTRACE_ATTACH as _,
+                libc::PTRACE_SEIZE as _,
+                tid,
+                std::ptr::null_mut::<c_void>(),
+                std::ptr::null_mut::<c_void>(),
+            )
+        };
+        if result == -1 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        let attached = Self(tid);
+
+        let result = unsafe {
+            libc::ptrace(
+                libc::PTRACE_INTERRUPT as _,
                 tid,
                 std::ptr::null_mut::<c_void>(),
                 std::ptr::null_mut::<c_void>(),
@@ -583,17 +596,9 @@ impl AttachedThread {
         let mut status = 0;
         let waited = unsafe { libc::waitpid(tid, &mut status, libc::__WALL) };
         if waited != tid || !libc::WIFSTOPPED(status) {
-            unsafe {
-                libc::ptrace(
-                    libc::PTRACE_DETACH as _,
-                    tid,
-                    std::ptr::null_mut::<c_void>(),
-                    std::ptr::null_mut::<c_void>(),
-                );
-            }
-            bail!("thread {tid} did not stop after ptrace attach");
+            bail!("thread {tid} did not stop after ptrace interrupt");
         }
-        Ok(Self(tid))
+        Ok(attached)
     }
 }
 
@@ -766,6 +771,44 @@ fn unescape_proc_path(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attaching_does_not_inject_a_group_stop_signal() {
+        struct ChildGuard(std::process::Child);
+
+        impl Drop for ChildGuard {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+
+        let child = std::process::Command::new("/bin/sleep")
+            .arg("5")
+            .spawn()
+            .expect("failed to spawn tracee");
+        let child = ChildGuard(child);
+        let pid = child.0.id() as libc::pid_t;
+        std::thread::sleep(Duration::from_millis(20));
+
+        let _attached = AttachedThread::attach(pid).expect("failed to attach to tracee");
+        let mut signal = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        let result = unsafe {
+            libc::ptrace(
+                libc::PTRACE_GETSIGINFO as _,
+                pid,
+                std::ptr::null_mut::<c_void>(),
+                signal.as_mut_ptr().cast::<c_void>(),
+            )
+        };
+        assert_ne!(result, -1, "failed to read ptrace stop signal");
+        let signal = unsafe { signal.assume_init() };
+        assert_ne!(
+            signal.si_signo,
+            libc::SIGSTOP,
+            "attaching injected SIGSTOP, which can race with detach"
+        );
+    }
 
     #[test]
     fn perf_event_attr_uses_the_version_zero_abi_size() {
