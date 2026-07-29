@@ -87,7 +87,7 @@ fn assert_valid_pprof(bytes: &[u8]) {
 }
 
 /// Do a small amount of CPU work to ensure at least a few samples are taken.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn do_cpu_work() {
     let mut x: u64 = 0;
     for i in 0..10_000_000u64 {
@@ -176,10 +176,10 @@ fn test_library_spawn_produces_valid_protobuf() {
 }
 
 // ---------------------------------------------------------------------------
-// Library API test — current() self-profile (no permissions needed)
+// Library API test — current() self-profile
 // ---------------------------------------------------------------------------
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn test_library_current_produces_valid_protobuf() {
     let mut handle = pprofessor::builder()
@@ -200,7 +200,7 @@ fn test_library_current_produces_valid_protobuf() {
 // SymbolicatedProfile fields
 // ---------------------------------------------------------------------------
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn test_symbolicated_profile_has_samples_and_duration() {
     let mut handle = pprofessor::builder()
@@ -237,7 +237,7 @@ fn test_symbolicated_profile_has_samples_and_duration() {
 // stop_unsymbolicated — frames should have hex function names
 // ---------------------------------------------------------------------------
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn test_stop_unsymbolicated_has_hex_functions() {
     let mut handle = pprofessor::builder()
@@ -273,9 +273,12 @@ fn test_stop_unsymbolicated_has_hex_functions() {
 // Closure profiler
 // ---------------------------------------------------------------------------
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn test_closure_profiler_returns_result_and_profile() {
+    #[cfg(target_os = "linux")]
+    let calling_thread = unsafe { libc::syscall(libc::SYS_gettid) as u64 };
+
     let (result, symbolicated) = pprofessor::builder()
         .freq(99)
         .profile(|| {
@@ -289,6 +292,14 @@ fn test_closure_profiler_returns_result_and_profile() {
         !symbolicated.samples.is_empty(),
         "no samples from closure profiler"
     );
+    #[cfg(target_os = "linux")]
+    assert!(
+        symbolicated
+            .samples
+            .iter()
+            .all(|sample| sample.thread_id == calling_thread),
+        "closure profiler sampled a thread other than the caller"
+    );
     assert_valid_pprof(&symbolicated.to_pprof());
 }
 
@@ -296,7 +307,7 @@ fn test_closure_profiler_returns_result_and_profile() {
 // Duration timeout
 // ---------------------------------------------------------------------------
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn test_duration_stops_sampling_automatically() {
     let mut handle = pprofessor::builder()
@@ -334,7 +345,7 @@ fn test_duration_stops_sampling_automatically() {
 // Thread name filter
 // ---------------------------------------------------------------------------
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn test_thread_name_filter() {
     use std::sync::{Arc, Barrier};
@@ -344,7 +355,7 @@ fn test_thread_name_filter() {
 
     // Spawn a named worker thread that does CPU work.
     let worker = std::thread::Builder::new()
-        .name("pprofessor-test-worker".to_string())
+        .name("prof-worker".to_string())
         .spawn(move || {
             barrier_clone.wait(); // signal ready
             do_cpu_work();
@@ -355,7 +366,7 @@ fn test_thread_name_filter() {
 
     let mut handle = pprofessor::builder()
         .freq(99)
-        .thread_name("pprofessor-test-worker")
+        .thread_name("prof-worker")
         .current()
         .expect("failed to create thread-filtered profiler");
 
@@ -373,7 +384,7 @@ fn test_thread_name_filter() {
             .cloned()
             .unwrap_or_default();
         assert!(
-            thread_name.contains("pprofessor-test-worker"),
+            thread_name.contains("prof-worker"),
             "unexpected thread name: {:?}",
             thread_name
         );
@@ -384,7 +395,7 @@ fn test_thread_name_filter() {
 // Custom symbolizer — renames all frames
 // ---------------------------------------------------------------------------
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn test_custom_symbolizer_renames_frames() {
     use pprofessor::{FrameInfo, Symbolizer};
@@ -430,7 +441,7 @@ fn test_custom_symbolizer_renames_frames() {
 // Symbolizer chain — always-None first, native fallback
 // ---------------------------------------------------------------------------
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn test_symbolizer_chain_fallback() {
     use pprofessor::{FrameInfo, Symbolizer, SymbolizerChain};
@@ -470,7 +481,7 @@ fn test_symbolizer_chain_fallback() {
 // Tree view — roots and children
 // ---------------------------------------------------------------------------
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn test_tree_view_has_roots() {
     let mut handle = pprofessor::builder()
