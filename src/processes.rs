@@ -1,7 +1,15 @@
+#[cfg(target_os = "macos")]
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "macos")]
 use std::ffi::CStr;
+#[cfg(target_os = "macos")]
 use std::mem::{MaybeUninit, size_of};
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::list_processes;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProcessInfo {
@@ -16,18 +24,25 @@ pub struct ProcessInfo {
     pub attachability_reason: Option<String>,
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Attachability {
     attachable: bool,
     reason: Option<String>,
 }
 
+#[cfg(target_os = "macos")]
 const CS_OPS_STATUS: libc::c_uint = 0;
+#[cfg(target_os = "macos")]
 const CS_GET_TASK_ALLOW: u32 = 0x0000_0004;
+#[cfg(target_os = "macos")]
 const CS_RUNTIME: u32 = 0x0001_0000;
+#[cfg(target_os = "macos")]
 const CS_PLATFORM_BINARY: u32 = 0x0400_0000;
+#[cfg(target_os = "macos")]
 const SYS_CSOPS: libc::c_int = 169;
 
+#[cfg(target_os = "macos")]
 fn classify_attachability(code_signing_flags: u32) -> Attachability {
     let target_allows_debugging = code_signing_flags & CS_GET_TASK_ALLOW != 0;
     let target_is_protected = code_signing_flags & (CS_RUNTIME | CS_PLATFORM_BINARY) != 0;
@@ -44,6 +59,7 @@ fn classify_attachability(code_signing_flags: u32) -> Attachability {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn process_attachability(pid: i32) -> Attachability {
     let mut flags = 0u32;
     let result = unsafe {
@@ -65,19 +81,27 @@ fn process_attachability(pid: i32) -> Attachability {
     }
 }
 
+#[cfg(target_os = "macos")]
 #[repr(C)]
 struct ProcArchInfo {
     cpu_type: i32,
     cpu_subtype: i32,
 }
 
+#[cfg(target_os = "macos")]
 const PROC_PIDARCHINFO: i32 = 19;
+#[cfg(target_os = "macos")]
 const CPU_ARCH_ABI64: i32 = 0x0100_0000;
+#[cfg(target_os = "macos")]
 const CPU_TYPE_X86: i32 = 7;
+#[cfg(target_os = "macos")]
 const CPU_TYPE_ARM: i32 = 12;
+#[cfg(target_os = "macos")]
 const CPU_TYPE_X86_64: i32 = CPU_TYPE_X86 | CPU_ARCH_ABI64;
+#[cfg(target_os = "macos")]
 const CPU_TYPE_ARM64: i32 = CPU_TYPE_ARM | CPU_ARCH_ABI64;
 
+#[cfg(target_os = "macos")]
 pub fn list_processes() -> Result<Vec<ProcessInfo>> {
     let uid = unsafe { libc::geteuid() };
     let mut capacity = 1024usize;
@@ -191,6 +215,7 @@ pub fn required_helper_arch<'a>(current: &str, target: &'a str) -> Option<&'a st
         .filter(|target| *target != current)
 }
 
+#[cfg(target_os = "macos")]
 fn c_char_array<const N: usize>(value: &[libc::c_char; N]) -> Option<String> {
     let bytes: Vec<u8> = value
         .iter()
@@ -200,7 +225,7 @@ fn c_char_array<const N: usize>(value: &[libc::c_char; N]) -> Option<String> {
     (!bytes.is_empty()).then(|| String::from_utf8_lossy(&bytes).into_owned())
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
 

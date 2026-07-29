@@ -11,8 +11,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  rust:
-    name: Rust (fmt, clippy, test)
+  rust-macos:
+    name: Rust macOS (fmt, clippy, test)
     runs-on: macos-15
 
     steps:
@@ -31,6 +31,30 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
+
+      - name: Run tests
+        run: cargo test -- --test-threads=1
+
+  rust-linux:
+    name: Rust Linux (clippy, test)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Allow per-process perf events
+        run: sudo sysctl kernel.perf_event_paranoid=2
 
       - name: Run tests
         run: cargo test -- --test-threads=1

@@ -78,6 +78,44 @@ jobs:
             pprofessor-${{ inputs.version }}-macos-universal.tar.gz
             pprofessor-${{ inputs.version }}-macos-universal.tar.gz.sha256
 
+  build-cli-linux:
+    name: Build CLI (Linux x86_64)
+    runs-on: ubuntu-latest
+    needs: validate-version
+    if: ${{ !failure() && !cancelled() }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Prepare release version
+        run: |
+          sed -i 's/^version = "[^"]*"/version = "${{ inputs.version }}"/' Cargo.toml
+          cargo update
+
+      - name: Build CLI
+        run: cargo build --release
+
+      - name: Package tarball
+        run: |
+          cp target/release/pprofessor pprofessor
+          ARCHIVE="pprofessor-${{ inputs.version }}-linux-x86_64.tar.gz"
+          tar -czf "$ARCHIVE" pprofessor
+          sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: cli-linux
+          path: |
+            pprofessor-${{ inputs.version }}-linux-x86_64.tar.gz
+            pprofessor-${{ inputs.version }}-linux-x86_64.tar.gz.sha256
+
   build-macos-app:
     name: Build macOS app (signed DMG)
     runs-on: macos-15
@@ -215,6 +253,7 @@ jobs:
       contents: write
     needs:
       - build-cli-macos
+      - build-cli-linux
       - build-macos-app
     if: ${{ !inputs.dry_run && !failure() && !cancelled() }}
 
@@ -263,5 +302,7 @@ jobs:
           files: |
             pprofessor-${{ inputs.version }}-macos-universal.tar.gz
             pprofessor-${{ inputs.version }}-macos-universal.tar.gz.sha256
+            pprofessor-${{ inputs.version }}-linux-x86_64.tar.gz
+            pprofessor-${{ inputs.version }}-linux-x86_64.tar.gz.sha256
             PProfessor-${{ inputs.version }}.dmg
             PProfessor-${{ inputs.version }}.dmg.sha256

@@ -30,8 +30,8 @@ pub enum AnalyzeFormat {
     name = "pprofessor",
     about = "Native process profiler with pprof output",
     long_about = "Samples CPU usage of a process and writes a gzip-compressed pprof profile.\n\n\
-                  Requires no special permissions when profiling a child process spawned via 'run'.\n\
-                  The 'attach' subcommand requires root or the com.apple.security.cs.debugger entitlement."
+                  Profiling a child process spawned via 'run' normally requires no special permissions.\n\
+                  The 'attach' subcommand is subject to the host operating system's debugger access policy."
 )]
 pub struct Cli {
     #[command(subcommand)]

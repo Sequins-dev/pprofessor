@@ -20,15 +20,17 @@ serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
 flate2 = "1"
 nix = { version = "0.29", features = ["signal", "process"] }
-object = { version = "0.36", features = ["macho", "read"] }
+object = { version = "0.36", features = ["elf", "macho", "read"] }
 addr2line = "0.24"
 gimli = "0.31"
 memmap2 = "0.9"
-symbolic-demangle = "12"
+cpp_demangle = "0.4"
+rustc-demangle = "0.1"
 libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 mach2 = "0.4"
+symbolic-demangle = "12"
 
 [dev-dependencies]
 flate2 = "1"

@@ -1,4 +1,4 @@
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn process_list_contains_the_current_process_and_only_current_user() {
     let processes = pprofessor::list_processes().unwrap();

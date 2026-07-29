@@ -1,17 +1,17 @@
 # pprofessor
 
-PProfessor is a macOS pprof toolkit:
+PProfessor is a native pprof toolkit:
 
-- `pprofessor` is a Rust CLI capture tool that samples a process and writes gzip-compressed pprof protobuf files.
+- `pprofessor` is a Rust CLI capture tool for macOS and Linux that samples a process and writes gzip-compressed pprof protobuf files.
 - `PProfessor.app` is a native SwiftUI viewer for opening and exploring those profiles.
 
 ## Requirements
 
-- macOS 15.0+ for the viewer
-- macOS 14.0+ for the CLI
-- Xcode 16+
-- Rust stable
-- XcodeGen for app project generation
+- CLI: Rust stable on macOS 14.0+ or Linux
+- Viewer: macOS 15.0+, Xcode 16+, and XcodeGen
+
+The viewer remains macOS-only. Linux support currently covers the CLI capture
+workflow and Rust profiling APIs, not the UI.
 
 ## Build
 
@@ -64,7 +64,11 @@ pprofessor processes
 pprofessor analyze profile.pb.gz
 ```
 
-The CLI uses macOS `task_for_pid`, so profiling another process requires root or a trusted signature with the debugger entitlement.
+On macOS, the CLI uses `task_for_pid`, so profiling another process requires
+root or a trusted signature with the debugger entitlement. On Linux, `run`
+works with the normal parent-child ptrace permission; `attach` follows the
+system ptrace policy and may require `CAP_SYS_PTRACE`, root, or a less
+restrictive Yama configuration.
 
 ### Terminal and Markdown analysis
 
@@ -117,6 +121,24 @@ let report = pprofessor::report::ProfileReport::from_profile(&profile, None)?;
 
 `PprofProfile` implements Serde's `Serialize` and `Deserialize` traits.
 `ProfileEncoder` remains available as a compatibility alias.
+
+## Rust API
+
+Linux supports profiling the current process and profiling a closure in
+addition to the CLI workflows:
+
+```rust
+let mut handle = pprofessor::builder().freq(99).current()?;
+let session = handle.start()?;
+run_workload();
+let profile = session.stop()?;
+
+let (result, profile) = pprofessor::builder().profile(|| run_workload())?;
+```
+
+In-process Linux profiling uses per-thread `perf_event_open` software
+CPU-clock events. It normally works without elevated privileges, but follows
+the host's `perf_event_paranoid` and `CAP_PERFMON` policy.
 
 When PProfessor.app is open, CLI `run` and `attach` sessions are discovered automatically and stream continuously symbolized pprof deltas to the app over loopback TCP at `127.0.0.1:57557`. The listener is never exposed to the network. The final gzip profile is retained by the app alongside its session metadata. Pass `--no-publish` to keep a capture CLI-only.
 

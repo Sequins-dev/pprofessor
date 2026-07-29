@@ -254,6 +254,7 @@ fn validate_process_identity(pid: u32, expected: u64, actual: Option<u64>) -> Re
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn attach_preflight_error(pid: u32, attachable: bool, reason: Option<&str>) -> Option<String> {
     (!attachable).then(|| {
         format!(
@@ -286,6 +287,7 @@ fn attach_command(options: AttachOptions) -> Result<()> {
             .map(|process| process.start_time_micros);
         validate_process_identity(pid, expected, actual)?;
     }
+    #[cfg(target_os = "macos")]
     if let Some(process) = target_process.as_ref()
         && let Some(error) = attach_preflight_error(
             pid,
@@ -295,32 +297,34 @@ fn attach_command(options: AttachOptions) -> Result<()> {
     {
         anyhow::bail!(error);
     }
-    let current_arch = if cfg!(target_arch = "aarch64") {
-        "arm64"
-    } else {
-        "x86_64"
-    };
-    if let Some(required_arch) = target_process
-        .as_ref()
-        .and_then(|process| pprofessor::required_helper_arch(current_arch, &process.architecture))
+    #[cfg(target_os = "macos")]
     {
-        install_signal_handlers()?;
-        let executable = std::env::current_exe().context("locating profiler executable")?;
-        let mut command = std::process::Command::new("/usr/bin/arch");
-        command.arg(format!("-{required_arch}")).arg(executable);
-        command.args(std::env::args_os().skip(1));
-        let mut child = command
-            .spawn()
-            .context("launching matching profiler architecture")?;
-        CHILD_PID.store(child.id() as i32, Ordering::Relaxed);
-        let status = child
-            .wait()
-            .context("waiting for matching profiler architecture")?;
-        CHILD_PID.store(0, Ordering::Relaxed);
-        if !status.success() {
-            anyhow::bail!("matching {required_arch} profiler exited with {status}");
+        let current_arch = if cfg!(target_arch = "aarch64") {
+            "arm64"
+        } else {
+            "x86_64"
+        };
+        if let Some(required_arch) = target_process.as_ref().and_then(|process| {
+            pprofessor::required_helper_arch(current_arch, &process.architecture)
+        }) {
+            install_signal_handlers()?;
+            let executable = std::env::current_exe().context("locating profiler executable")?;
+            let mut command = std::process::Command::new("/usr/bin/arch");
+            command.arg(format!("-{required_arch}")).arg(executable);
+            command.args(std::env::args_os().skip(1));
+            let mut child = command
+                .spawn()
+                .context("launching matching profiler architecture")?;
+            CHILD_PID.store(child.id() as i32, Ordering::Relaxed);
+            let status = child
+                .wait()
+                .context("waiting for matching profiler architecture")?;
+            CHILD_PID.store(0, Ordering::Relaxed);
+            if !status.success() {
+                anyhow::bail!("matching {required_arch} profiler exited with {status}");
+            }
+            return Ok(());
         }
-        return Ok(());
     }
     install_signal_handlers()?;
 
@@ -532,7 +536,7 @@ fn main() {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod attach_error_tests {
     use super::*;
 
