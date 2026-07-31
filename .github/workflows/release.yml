@@ -55,13 +55,47 @@ jobs:
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Import signing certificate
+        uses: apple-actions/import-codesign-certs@v6
+        with:
+          p12-file-base64: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12 }}
+          p12-password: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
+
       - name: Prepare release version
         run: |
           sed -i '' 's/^version = "[^"]*"/version = "${{ inputs.version }}"/' Cargo.toml
           cargo update
 
-      - name: Build universal CLI
-        run: make cli-helper-universal
+      - name: Store notarization credentials
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          xcrun notarytool store-credentials "CI_NOTARY" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID"
+
+      - name: Build and sign universal CLI
+        run: make sign-cli-helper SIGN_IDENTITY="Developer ID Application"
+
+      - name: Verify debugger entitlement
+        run: |
+          codesign --verify --strict --verbose=2 target/cli-helper/pprofessor
+          codesign -d --entitlements - --xml target/cli-helper/pprofessor \
+            | plutil -extract 'com\.apple\.security\.cs\.debugger' raw -o - -- - \
+            | grep -qx true
+          codesign -dv target/cli-helper/pprofessor 2>&1 | grep -q 'flags=.*runtime'
+
+      - name: Notarize CLI
+        run: |
+          # notarytool only accepts .zip/.pkg/.dmg; a bare Mach-O cannot be
+          # stapled, so Gatekeeper resolves the ticket online by cdhash.
+          ditto -c -k target/cli-helper/pprofessor "$RUNNER_TEMP/pprofessor-notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/pprofessor-notarize.zip" \
+            --keychain-profile "CI_NOTARY" \
+            --wait
 
       - name: Package tarball
         run: |
