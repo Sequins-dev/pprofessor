@@ -1,7 +1,7 @@
 //! Exact observation of the dynamically linked glibc malloc family.
 use super::capture::{CaptureOptions, done, spawn};
 use super::{HeapFrame, HeapMapping, HeapProfile, NativeHeapTracker};
-use crate::{LoadedImage, NativeSymbolizer, PprofProfile, Symbolizer};
+use crate::{NativeSymbolizer, PprofProfile, Symbolizer};
 use anyhow::{Context, Result, ensure};
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
@@ -208,18 +208,7 @@ impl LogReader {
             .or_else(|_| std::fs::read_to_string(&self.map_path))
             .context("reading recorded binary mappings")?;
         let mappings = native_mappings(&maps);
-        let images = mappings
-            .iter()
-            .map(|m| {
-                (
-                    m.memory_start.saturating_sub(m.file_offset),
-                    m.filename.clone(),
-                )
-            })
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .map(|(load_address, path)| LoadedImage { load_address, path })
-            .collect();
+        let images = crate::sampler::linux::parse_loaded_images(&maps);
         let addresses = profile
             .samples
             .keys()
@@ -281,10 +270,9 @@ fn native_mappings(maps: &str) -> Vec<HeapMapping> {
         ) else {
             continue;
         };
-        let path = fields[5..]
-            .join(" ")
-            .trim_end_matches(" (deleted)")
-            .to_owned();
+        let path = crate::sampler::linux::unescape_proc_path(
+            fields[5..].join(" ").trim_end_matches(" (deleted)"),
+        );
         let build_id = build_ids
             .entry(path.clone())
             .or_insert_with(|| {
