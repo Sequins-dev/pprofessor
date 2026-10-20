@@ -1,6 +1,7 @@
 pub mod builder;
 pub(crate) mod encode;
 pub mod handle;
+pub mod heap;
 pub mod pprof;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod processes;

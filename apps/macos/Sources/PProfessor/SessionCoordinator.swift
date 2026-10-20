@@ -70,7 +70,7 @@ final class SessionCoordinator {
             lastError = errorSummary
         }
         onSelectedProfile = { [weak viewModel] profile in
-            viewModel?.loadDecodedProfile(profile, resetTimelineSelection: false)
+            viewModel?.loadDecodedProfile(profile, resetTimelineSelection: !(viewModel?.hasProfile ?? false))
         }
         onSelectedArtifact = { [weak viewModel] url in
             guard let viewModel else { return }
@@ -141,7 +141,7 @@ final class SessionCoordinator {
         launchedProcesses[session.id]?.interrupt()
     }
 
-    func launchAttach(process: AttachProcessInfo, frequency: Int = 99) throws {
+    func launchAttach(process: AttachProcessInfo, frequency: Int = 99, heap: Bool = false) throws {
         let helper = Bundle.main.bundleURL.appending(path: "Contents/Helpers/pprofessor")
         guard FileManager.default.isExecutableFile(atPath: helper.path) else {
             throw CocoaError(.fileNoSuchFile)
@@ -153,7 +153,7 @@ final class SessionCoordinator {
         let errorPipe = Pipe()
         processTask.executableURL = helper
         processTask.arguments = [
-            "attach", "--freq", String(frequency), "--output", output.path,
+            "attach", "--profile", heap ? "heap" : "stack", "--freq", String(frequency), "--output", output.path,
             "--expected-start-time", String(process.startTimeMicros),
             "--session-id", id.uuidString, String(process.pid),
         ]
@@ -208,6 +208,7 @@ final class SessionCoordinator {
         case .profileCheckpoint:
             runtime.accumulator.replace(with: DecodedProfile.decode(from: frame.payload))
             update(session: session, from: runtime.accumulator.profile, status: .live)
+            appendJournal(sessionID: sessionID, frame: frame)
         case .profileDelta:
             runtime.accumulator.merge(delta: DecodedProfile.decode(from: frame.payload))
             update(session: session, from: runtime.accumulator.profile, status: .live)
@@ -249,7 +250,7 @@ final class SessionCoordinator {
             let session = ProfileSession(
                 id: id,
                 displayName: hello.processName,
-                source: hello.mode == "run" ? .cliRun : .cliAttach,
+                source: hello.mode == "runtime" ? .runtime : (hello.mode == "run" ? .cliRun : .cliAttach),
                 status: .live,
                 pid: Int(hello.pid),
                 processName: hello.processName,

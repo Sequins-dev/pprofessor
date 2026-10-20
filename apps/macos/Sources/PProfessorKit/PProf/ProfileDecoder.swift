@@ -14,6 +14,11 @@ public struct DecodedProfile: Sendable {
     public var durationNanos: Int64 = 0
     public var periodType: ValueType?
     public var period: Int64 = 0
+    public var defaultSampleType: UInt64 = 0
+    public var comments: [UInt64] = []
+    public var dropFrames: UInt64 = 0
+    public var keepFrames: UInt64 = 0
+    public var docURL: UInt64 = 0
 
     public init() {}
 
@@ -34,6 +39,18 @@ public struct DecodedProfile: Sendable {
                 profile.functions.append(ProfFunction.decode(from: value))
             case 6 where wireType == .lengthDelimited:
                 profile.stringTable.append(String(data: value, encoding: .utf8) ?? "")
+            case 7 where wireType == .varint:
+                profile.dropFrames = decodeVarint(from: value, at: 0).0
+            case 8 where wireType == .varint:
+                profile.keepFrames = decodeVarint(from: value, at: 0).0
+            case 13 where wireType == .varint:
+                profile.comments.append(decodeVarint(from: value, at: 0).0)
+            case 13 where wireType == .lengthDelimited:
+                profile.comments.append(contentsOf: decodePackedUInt64s(from: value))
+            case 14 where wireType == .varint:
+                profile.defaultSampleType = decodeVarint(from: value, at: 0).0
+            case 15 where wireType == .varint:
+                profile.docURL = decodeVarint(from: value, at: 0).0
             case 9 where wireType == .varint:
                 let (v, _) = decodeVarint(from: value, at: 0)
                 profile.timeNanos = Int64(bitPattern: v)
@@ -83,16 +100,20 @@ extension ProfLine {
     static func decode(from data: Data) -> ProfLine {
         var functionID: UInt64 = 0
         var line: Int64 = 0
+        var column: Int64 = 0
         decodeProtobuf(from: data) { field, wireType, value in
             guard wireType == .varint else { return }
             let (v, _) = decodeVarint(from: value, at: 0)
             switch field {
             case 1: functionID = v
             case 2: line = Int64(bitPattern: v)
+            case 3: column = Int64(bitPattern: v)
             default: break
             }
         }
-        return ProfLine(functionID: functionID, line: line)
+        var result = ProfLine(functionID: functionID, line: line)
+        result.column = column
+        return result
     }
 }
 
@@ -102,6 +123,7 @@ extension ProfLocation {
         var mappingID: UInt64 = 0
         var address: UInt64 = 0
         var lines: [ProfLine] = []
+        var isFolded = false
         decodeProtobuf(from: data) { field, wireType, value in
             switch field {
             case 1 where wireType == .varint:
@@ -115,26 +137,35 @@ extension ProfLocation {
                 address = v
             case 4 where wireType == .lengthDelimited:
                 lines.append(ProfLine.decode(from: value))
+            case 5 where wireType == .varint:
+                isFolded = decodeVarint(from: value, at: 0).0 != 0
             default:
                 break
             }
         }
-        return ProfLocation(id: id, mappingID: mappingID, address: address, lines: lines)
+        var result = ProfLocation(id: id, mappingID: mappingID, address: address, lines: lines)
+        result.isFolded = isFolded
+        return result
     }
 }
 
 extension ProfMapping {
     static func decode(from data: Data) -> ProfMapping {
-        var values = [UInt64](repeating: 0, count: 6)
+        var values = [UInt64](repeating: 0, count: 10)
         decodeProtobuf(from: data) { field, wireType, value in
-            guard wireType == .varint, (1...6).contains(field) else { return }
+            guard wireType == .varint, (1...10).contains(field) else { return }
             let (decoded, _) = decodeVarint(from: value, at: 0)
             values[Int(field - 1)] = decoded
         }
-        return ProfMapping(
+        var mapping = ProfMapping(
             id: values[0], memoryStart: values[1], memoryLimit: values[2],
             fileOffset: values[3], filename: values[4], buildID: values[5]
         )
+        mapping.hasFunctions = values[6] != 0
+        mapping.hasFilenames = values[7] != 0
+        mapping.hasLineNumbers = values[8] != 0
+        mapping.hasInlineFrames = values[9] != 0
+        return mapping
     }
 }
 

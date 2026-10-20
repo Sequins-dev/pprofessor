@@ -1,4 +1,5 @@
 import SwiftUI
+import PProfessorKit
 
 struct ProfileToolbar: ToolbarContent {
     @Bindable var viewModel: ProfileViewModel
@@ -35,7 +36,20 @@ struct ProfileToolbar: ToolbarContent {
             .pickerStyle(.menu)
             .frame(width: 170)
             .disabled(viewModel.availableValueTypes.isEmpty)
-            .help("Select the profile sample type")
+            .help((["Select the profile sample type"] + viewModel.profileComments).joined(separator: "\n"))
+
+            if viewModel.availableHeaps.count > 1 {
+                Picker("Heap", selection: $viewModel.selectedHeap) {
+                    ForEach(viewModel.availableHeaps, id: \.self) { heap in Text(heap).tag(Optional(heap)) }
+                }
+                .help("Select one heap domain; backing memory and suballocations may overlap")
+            }
+            if viewModel.hasNegativeValues {
+                Picker("Difference", selection: $viewModel.valueSign) {
+                    ForEach(ProfileValueSign.allCases, id: \.self) { sign in Text(sign.rawValue).tag(sign) }
+                }
+                .help("View increases or decreases in the signed pprof difference")
+            }
 
             Picker("Thread", selection: $viewModel.selectedThread) {
                 Text("All Threads").tag(nil as String?)
@@ -74,7 +88,7 @@ struct ProfileToolbar: ToolbarContent {
 
         ToolbarItem(placement: .primaryAction) {
             Menu {
-                if viewModel.sourceURL != nil {
+                if viewModel.hasProfile {
                     Button("Save Profile...") { viewModel.saveProfile() }
                 }
                 Button("Export as JSON") { viewModel.exportAsJSON() }

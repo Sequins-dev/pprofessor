@@ -36,6 +36,11 @@ public struct LiveProfileAccumulator: Sendable {
                     unit: intern(delta.string(at: periodType.unit))
                 )
             }
+            profile.defaultSampleType = delta.defaultSampleType == 0 ? 0 : intern(delta.string(at: delta.defaultSampleType))
+            profile.comments = delta.comments.map { intern(delta.string(at: $0)) }
+            profile.dropFrames = delta.dropFrames == 0 ? 0 : intern(delta.string(at: delta.dropFrames))
+            profile.keepFrames = delta.keepFrames == 0 ? 0 : intern(delta.string(at: delta.keepFrames))
+            profile.docURL = delta.docURL == 0 ? 0 : intern(delta.string(at: delta.docURL))
             profile.period = delta.period
             profile.timeNanos = delta.timeNanos
         }
@@ -56,14 +61,11 @@ public struct LiveProfileAccumulator: Sendable {
             } else {
                 globalID = UInt64(profile.mappings.count + 1)
                 mappingIDs[key] = globalID
-                profile.mappings.append(ProfMapping(
-                    id: globalID,
-                    memoryStart: mapping.memoryStart,
-                    memoryLimit: mapping.memoryLimit,
-                    fileOffset: mapping.fileOffset,
-                    filename: intern(key.filename),
-                    buildID: intern(key.buildID)
-                ))
+                var globalMapping = mapping
+                globalMapping.id = globalID
+                globalMapping.filename = intern(key.filename)
+                globalMapping.buildID = intern(key.buildID)
+                profile.mappings.append(globalMapping)
             }
             incomingMappingIDs[mapping.id] = globalID
         }
@@ -96,30 +98,30 @@ public struct LiveProfileAccumulator: Sendable {
                         startLine: functionKey.startLine
                     ))
                 }
-                globalLines.append(ProfLine(functionID: globalFunctionID, line: line.line))
-                lineKeys.append(LineKey(functionID: globalFunctionID, line: line.line))
+                var globalLine = line
+                globalLine.functionID = globalFunctionID
+                globalLines.append(globalLine)
+                lineKeys.append(LineKey(functionID: globalFunctionID, line: line.line, column: line.column))
             }
 
-            let key = LocationKey(mappingID: globalMappingID, address: location.address, lines: lineKeys)
+            let key = LocationKey(mappingID: globalMappingID, address: location.address, lines: lineKeys, isFolded: location.isFolded)
             let globalLocationID: UInt64
             if let existing = locationIDs[key] {
                 globalLocationID = existing
             } else {
                 globalLocationID = UInt64(profile.locations.count + 1)
                 locationIDs[key] = globalLocationID
-                profile.locations.append(ProfLocation(
-                    id: globalLocationID,
-                    mappingID: globalMappingID,
-                    address: location.address,
-                    lines: globalLines
-                ))
+                var globalLocation = location
+                globalLocation.id = globalLocationID
+                globalLocation.mappingID = globalMappingID
+                globalLocation.lines = globalLines
+                profile.locations.append(globalLocation)
             }
             incomingLocationIDs[location.id] = globalLocationID
         }
 
         for sample in delta.samples {
             let stack = sample.locationIDs.compactMap { incomingLocationIDs[$0] }
-            guard !stack.isEmpty else { continue }
             let labels = sample.labels.map { label in
                 ProfLabel(
                     key: intern(delta.string(at: label.key)),
@@ -171,12 +173,14 @@ private struct FunctionKey: Hashable, Sendable {
 private struct LineKey: Hashable, Sendable {
     let functionID: UInt64
     let line: Int64
+    let column: Int64
 }
 
 private struct LocationKey: Hashable, Sendable {
     let mappingID: UInt64
     let address: UInt64
     let lines: [LineKey]
+    let isFolded: Bool
 }
 
 private struct LabelKey: Hashable, Sendable {

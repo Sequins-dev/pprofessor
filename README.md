@@ -70,6 +70,114 @@ works with the normal parent-child ptrace permission; `attach` follows the
 system ptrace policy and may require `CAP_SYS_PTRACE`, root, or a less
 restrictive Yama configuration.
 
+### Native heap profiling
+
+Capture native heap allocations on macOS and Linux:
+
+```sh
+pprofessor run --profile heap --output heap.pb.gz ./my-app
+pprofessor run --profile heap --heap-interval 2000 --duration 10 ./my-app
+pprofessor analyze heap.pb.gz --sample-type inuse_space
+pprofessor analyze heap.pb.gz --sample-type alloc_space
+pprofessor compare before.pb.gz after.pb.gz --output growth.pb.gz
+```
+
+Heap profiles contain `alloc_objects` and `alloc_space` (cumulative allocation
+count and bytes), and `inuse_objects` and `inuse_space` (outstanding allocations).
+The default metric is `inuse_space`. Bytes are allocator-reported block sizes,
+including allocation rounding, rather than RSS or requested payload sizes.
+Freed allocations retain their cumulative cost and contribute zero live bytes.
+Comparisons export signed values: current minus base, matched by allocation
+stacks and native image identity rather than relocated program counters.
+
+The app's sample selector switches between bytes and object counts. Live heap
+checkpoints replace the previous heap; they are never added together. Signed
+profiles have Increase/Decrease views. Save Profile exports the complete selected
+pprof profile, including from a live session. Every displayed measurement is
+represented in that export. Heap captures do not create RSS timelines, object
+reference graphs, or a proprietary profile format.
+
+Capture is **exact allocation tracing**, intended for diagnostics. Recording
+all allocation stacks and free events adds CPU, disk, and memory overhead;
+`--heap-interval` controls checkpoint collection, not allocation sampling.
+Stacks are limited to the collector's available unwinding depth (64 frames on
+Linux). Recording begins when the platform recorder initializes, so earlier
+runtime/loader allocations may have no recorded allocation site. Coverage is
+included in the pprof comments. Capture is per process; forked children are not
+combined with the parent. Replacing the target with `exec` ends the recording
+epoch and is rejected; profile the final executable directly. Thread filters are rejected because allocations can
+be freed by a different thread.
+
+On **macOS**, capture uses Apple's full MallocStackLogging history through
+`malloc_history`, with VM backing regions excluded to avoid counting malloc
+storage twice. A bundled universal finalization helper allows a final snapshot
+before normal exit or `_exit`, including short-lived programs. The target must
+permit dylib injection and debugger inspection; use a development build when
+hardened runtime or library validation prevents loading the helper. The tool
+never changes the target's signature or weakens system protections.
+
+On **Linux**, an embedded allocation observer interposes the dynamically linked
+glibc system allocator. It records malloc/calloc/realloc, aligned allocation,
+and free operations, including cross-thread releases. Static executables,
+secure-execution targets, other architectures, and custom allocators that
+bypass glibc are outside this backend's coverage. Existing `LD_PRELOAD` or
+`DYLD_INSERT_LIBRARIES` settings are rejected instead of silently composing
+potentially incompatible allocator interposers. Allocator-specific and managed
+profiles can use the runtime integration below.
+
+To attach, allocation recording must already be enabled; past allocation
+stacks cannot be recovered from an uninstrumented process:
+
+```sh
+# macOS: launch with full, uncompacted history (do not also set MallocStackLogging).
+MallocStackLoggingNoCompact=1 ./my-app
+pprofessor attach --profile heap --duration 5 --output heap.pb.gz PID
+
+# Linux: install the observer, then launch with a new private log path.
+pprofessor heap-recorder --output /absolute/path/libpprofessor_heap.so
+mkdir -m 700 /absolute/path/heap-recording
+PPROFESSOR_HEAP_LOG=/absolute/path/heap-recording/events \
+  LD_PRELOAD=/absolute/path/libpprofessor_heap.so ./my-app
+pprofessor attach --profile heap --duration 5 --output heap.pb.gz PID
+```
+
+Linux attach reads the log path from the target environment and verifies the
+log's PID and permissions. Attaching does not terminate the target or disable
+its recorder; remove recording configuration on the next launch when finished.
+A normal `run` completes at target exit; stopping a `run` early terminates the
+owned target. Fatal termination on macOS can prevent final capture; if an earlier
+checkpoint exists it is exported with an explicit incomplete-finalization
+comment, otherwise capture fails.
+
+### Managed runtimes and custom allocators
+
+A runtime can emit an ordinary heap pprof file and import it into the app, or:
+
+```sh
+pprofessor publish runtime-heap.pb.gz --name 'JavaScript heap'
+cargo run --example heap_arena -- arena.pb
+```
+
+Rust integrations can use `heap::HeapProfile` for complete four-metric snapshots,
+or construct `PprofProfile` directly when only some metrics are available.
+`SessionPublisher::publish_heap_checkpoint` validates and publishes those
+profiles through the existing local session transport. Repeated updates must
+be cumulative checkpoints; the app replaces the prior checkpoint. Start a
+separate session for each heap domain. An optional standard pprof sample label
+named `heap` identifies the domain; the app selects one domain at a time when
+an imported profile contains multiple domains. CLI analysis requires `--heap NAME`
+for such profiles. Native backing storage and
+managed objects can overlap and must not be summed. Do not supply zero for
+unavailable metrics: omit those sample types. Sampling providers must supply
+appropriately weighted estimates and preserve their sampling period in pprof.
+
+This integration reports allocation statistics and source stacks, including
+logical objects allocated inside arenas or GC heaps. It does not claim to infer
+GC object liveness from native malloc events or export object-reference graphs.
+Runtime adapters must use their own allocation/liveness APIs to produce the
+measurements. The shipped arena example demonstrates this path without adding
+a runtime dependency to the profiler.
+
 ### Terminal and Markdown analysis
 
 `analyze` reads raw or gzip-compressed pprof protobuf files and highlights the
@@ -141,7 +249,7 @@ special permissions. On Linux, it uses per-thread `perf_event_open` software
 CPU-clock events. Linux profiling normally works without elevated privileges,
 but follows the host's `perf_event_paranoid` and `CAP_PERFMON` policy.
 
-When PProfessor.app is open, CLI `run` and `attach` sessions are discovered automatically and stream continuously symbolized pprof deltas to the app over loopback TCP at `127.0.0.1:57557`. The listener is never exposed to the network. The final gzip profile is retained by the app alongside its session metadata. Pass `--no-publish` to keep a capture CLI-only.
+When PProfessor.app is open, CLI `run` and `attach` sessions are discovered automatically and stream symbolized pprof stack deltas or heap checkpoints to the app over loopback TCP at `127.0.0.1:57557`. The listener is never exposed to the network. The final gzip profile is retained by the app alongside its session metadata. Pass `--no-publish` to keep a capture CLI-only.
 
 The GitHub release app's Attach button lists attachable processes owned by the current user. The App Store build omits all in-app attachment controls; live sessions still appear when captured by a separately installed CLI. Live, completed, imported, failed, and interrupted captures remain in the Sessions sidebar until explicitly deleted.
 

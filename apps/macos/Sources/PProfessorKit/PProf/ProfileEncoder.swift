@@ -18,6 +18,7 @@ public struct ValueType: Sendable {
 public struct ProfLine: Sendable {
     public var functionID: UInt64
     public var line: Int64
+    public var column: Int64 = 0
 
     public init(functionID: UInt64, line: Int64) {
         self.functionID = functionID
@@ -27,6 +28,7 @@ public struct ProfLine: Sendable {
     func encode(into buf: inout Data) {
         encodeVarintField(field: 1, value: functionID, into: &buf)
         encodeSInt64Field(field: 2, value: line, into: &buf)
+        encodeSInt64Field(field: 3, value: column, into: &buf)
     }
 }
 
@@ -35,6 +37,7 @@ public struct ProfLocation: Sendable {
     public var mappingID: UInt64
     public var address: UInt64
     public var lines: [ProfLine]
+    public var isFolded = false
 
     public init(id: UInt64, lines: [ProfLine]) {
         self.id = id
@@ -59,6 +62,7 @@ public struct ProfLocation: Sendable {
             line.encode(into: &inner)
             encodeLengthDelimited(field: 4, data: inner, into: &buf)
         }
+        encodeVarintField(field: 5, value: isFolded ? 1 : 0, into: &buf)
     }
 }
 
@@ -69,6 +73,10 @@ public struct ProfMapping: Sendable {
     public var fileOffset: UInt64
     public var filename: UInt64
     public var buildID: UInt64
+    public var hasFunctions = false
+    public var hasFilenames = false
+    public var hasLineNumbers = false
+    public var hasInlineFrames = false
 
     public init(id: UInt64, memoryStart: UInt64, memoryLimit: UInt64, fileOffset: UInt64, filename: UInt64, buildID: UInt64) {
         self.id = id
@@ -86,6 +94,10 @@ public struct ProfMapping: Sendable {
         encodeVarintField(field: 4, value: fileOffset, into: &buf)
         encodeVarintField(field: 5, value: filename, into: &buf)
         encodeVarintField(field: 6, value: buildID, into: &buf)
+        encodeVarintField(field: 7, value: hasFunctions ? 1 : 0, into: &buf)
+        encodeVarintField(field: 8, value: hasFilenames ? 1 : 0, into: &buf)
+        encodeVarintField(field: 9, value: hasLineNumbers ? 1 : 0, into: &buf)
+        encodeVarintField(field: 10, value: hasInlineFrames ? 1 : 0, into: &buf)
     }
 }
 
@@ -167,6 +179,11 @@ public struct ProfileEncoder {
     public var durationNanos: Int64
     public var periodType: ValueType
     public var period: Int64
+    public var defaultSampleType: UInt64 = 0
+    public var comments: [UInt64] = []
+    public var dropFrames: UInt64 = 0
+    public var keepFrames: UInt64 = 0
+    public var docURL: UInt64 = 0
 
     public init() {
         strings = StringTable()
@@ -207,12 +224,17 @@ public struct ProfileEncoder {
         for s in strings.strings {
             encodeStringField(field: 6, string: s, into: &buf)
         }
+        encodeVarintField(field: 7, value: dropFrames, into: &buf)
+        encodeVarintField(field: 8, value: keepFrames, into: &buf)
         encodeSInt64Field(field: 9, value: timeNanos, into: &buf)
         encodeSInt64Field(field: 10, value: durationNanos, into: &buf)
         var ptBuf = Data(); periodType.encode(into: &ptBuf)
         encodeLengthDelimited(field: 11, data: ptBuf, into: &buf)
         encodeSInt64Field(field: 12, value: period, into: &buf)
 
+        for comment in comments { encodeVarintField(field: 13, value: comment, into: &buf) }
+        encodeVarintField(field: 14, value: defaultSampleType, into: &buf)
+        encodeVarintField(field: 15, value: docURL, into: &buf)
         return buf
     }
 }

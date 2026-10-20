@@ -4,12 +4,13 @@ import PProfessorCaptureSupport
 import SwiftUI
 
 struct ProcessPickerView: View {
-    let onAttach: (AttachProcessInfo) -> Void
+    let onAttach: (AttachProcessInfo, Bool) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var processes: [AttachProcessInfo] = []
     @State private var selection: AttachProcessInfo.ID?
     @State private var search = ""
     @State private var error: String?
+    @State private var heap = false
 
     private var filtered: [AttachProcessInfo] {
         guard !search.isEmpty else { return processes }
@@ -28,6 +29,14 @@ struct ProcessPickerView: View {
     var body: some View {
         VStack(spacing: 12) {
             Text("Attach to Process").font(.headline)
+            Picker("Profile", selection: $heap) {
+                Text("Stacks").tag(false)
+                Text("Heap allocations").tag(true)
+            }.pickerStyle(.segmented)
+            if heap {
+                Text("Heap attachment requires full malloc stack logging enabled before launch (MallocStackLoggingNoCompact=1).")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             TextField("Search name, path, or PID", text: $search)
                 .textFieldStyle(.roundedBorder)
             List(filtered, selection: $selection) { process in
@@ -49,7 +58,7 @@ struct ProcessPickerView: View {
                 Spacer()
                 Button("Attach") {
                     guard let process = selectedProcess, process.canAttach else { return }
-                    onAttach(process)
+                    onAttach(process, heap)
                     dismiss()
                 }
                 .buttonStyle(.borderedProminent)

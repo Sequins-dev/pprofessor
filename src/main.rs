@@ -1,6 +1,6 @@
 mod cli;
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::time::{Duration, Instant, SystemTime};
@@ -406,11 +406,13 @@ fn attach_command(options: AttachOptions) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn analyze_command(
     input: std::path::PathBuf,
     view: AnalyzeView,
     format: AnalyzeFormat,
     sample_type: Option<String>,
+    heap: Option<String>,
     limit: usize,
     min_percent: f64,
     output: Option<std::path::PathBuf>,
@@ -418,9 +420,9 @@ fn analyze_command(
     if output.as_ref() == Some(&input) {
         anyhow::bail!("analysis output must not overwrite the input profile");
     }
-    let data = std::fs::read(&input)
-        .with_context(|| format!("reading pprof profile {}", input.display()))?;
-    let report = pprofessor::report::ProfileReport::from_pprof(&data, sample_type.as_deref())?;
+    let mut profile = read_profile(&input)?;
+    pprofessor::heap::select_domain(&mut profile, heap.as_deref())?;
+    let report = pprofessor::report::ProfileReport::from_profile(&profile, sample_type.as_deref())?;
     let view = match view {
         AnalyzeView::Summary => pprofessor::report::ReportView::Summary,
         AnalyzeView::Top => pprofessor::report::ReportView::TopFrames,
@@ -448,6 +450,149 @@ fn analyze_command(
     Ok(())
 }
 
+fn read_profile(path: &Path) -> Result<pprofessor::PprofProfile> {
+    let data = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let bytes = if data.starts_with(&[0x1f, 0x8b]) {
+        let mut bytes = Vec::new();
+        flate2::read::GzDecoder::new(&data[..]).read_to_end(&mut bytes)?;
+        bytes
+    } else {
+        data
+    };
+    pprofessor::PprofProfile::decode(&bytes)
+}
+fn compare_command(base: &Path, current: &Path, output: &Path) -> Result<()> {
+    anyhow::ensure!(
+        output != base && output != current,
+        "comparison output must not overwrite an input profile"
+    );
+    let profile =
+        pprofessor::heap::compare::difference(&read_profile(base)?, &read_profile(current)?)?;
+    write_gzip(&profile.encode(), output)
+}
+fn publish_command(input: &Path, name: &str) -> Result<()> {
+    let profile = read_profile(input)?;
+    pprofessor::heap::validate_profile(&profile)?;
+    let mut publisher = pprofessor::SessionPublisher::new(
+        pprofessor::SessionPublisher::default_address(),
+        pprofessor::SessionHello::new(
+            uuid::Uuid::new_v4().to_string(),
+            "runtime",
+            std::process::id(),
+            name,
+            0,
+        ),
+    );
+    anyhow::ensure!(
+        publisher.publish_heap_checkpoint(&profile)?,
+        "PProfessor app is not listening on localhost"
+    );
+    anyhow::ensure!(
+        publisher.send(
+            pprofessor::FrameKind::FinalProfile,
+            &gzip_data(&profile.encode())?
+        )?,
+        "app disconnected before the profile completed"
+    );
+    Ok(())
+}
+fn install_heap_recorder(output: &Path) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::io::Write;
+        let library = pprofessor::heap::linux::recorder_library();
+        anyhow::ensure!(
+            !library.is_empty(),
+            "the native recorder requires Linux glibc"
+        );
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(output)?;
+        file.write_all(library)?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = output;
+        anyhow::bail!("macOS uses built-in malloc stack logging; no recorder library is needed");
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn heap_command(
+    target: Option<(std::ffi::OsString, Vec<std::ffi::OsString>)>,
+    pid: Option<u32>,
+    output: std::path::PathBuf,
+    duration: Option<f64>,
+    interval: u64,
+    publish: bool,
+    id: Option<String>,
+) -> Result<()> {
+    install_signal_handlers()?;
+    let duration = duration
+        .map(|s| {
+            anyhow::ensure!(
+                s.is_finite() && s > 0.0,
+                "duration must be finite and positive"
+            );
+            Duration::try_from_secs_f64(s).context("invalid capture duration")
+        })
+        .transpose()?;
+    let options = pprofessor::heap::capture::CaptureOptions {
+        interval: Duration::from_millis(interval),
+        duration,
+    };
+    let name = target
+        .as_ref()
+        .map(|(b, _)| b.to_string_lossy().into_owned())
+        .unwrap_or_else(|| format!("pid {}", pid.unwrap_or(0)));
+    let id = id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let mut publisher = None;
+    let mut checkpoint = |pid, profile: &pprofessor::PprofProfile| {
+        if publish {
+            let publisher = publisher.get_or_insert_with(|| {
+                pprofessor::SessionPublisher::new(
+                    pprofessor::SessionPublisher::default_address(),
+                    pprofessor::SessionHello::new(
+                        &id,
+                        if target.is_some() { "run" } else { "attach" },
+                        pid,
+                        &name,
+                        0,
+                    ),
+                )
+            });
+            let _ = publisher.publish_heap_checkpoint(profile);
+        }
+    };
+    let result = if let Some((binary, args)) = &target {
+        pprofessor::heap::capture::run(binary, args, &options, &STOP_FLAG, &mut checkpoint)
+    } else {
+        pprofessor::heap::capture::attach(pid.unwrap(), &options, &STOP_FLAG, &mut checkpoint)
+    };
+    match result {
+        Ok(profile) => {
+            let bytes = profile.encode();
+            write_gzip(&bytes, &output)?;
+            if let Some(publisher) = publisher.as_mut() {
+                let _ = publisher.send(pprofessor::FrameKind::FinalProfile, &gzip_data(&bytes)?);
+            }
+            eprintln!("pprofessor: heap profile written to {}", output.display());
+            Ok(())
+        }
+        Err(error) => {
+            if let Some(publisher) = publisher.as_mut() {
+                let _ = publisher.send(
+                    pprofessor::FrameKind::Failed,
+                    format!("{error:#}").as_bytes(),
+                );
+            }
+            Err(error)
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -457,6 +602,8 @@ fn main() {
 
     let result = match cli.command {
         Command::Run {
+            profile: kind,
+            heap_interval,
             publish,
             freq,
             output,
@@ -466,18 +613,40 @@ fn main() {
             main_thread,
             binary,
             args,
-        } => run_command(
-            binary,
-            args,
-            freq,
-            output,
-            duration,
-            thread,
-            thread_id,
-            main_thread,
-            publish,
-        ),
+        } => {
+            if kind == cli::ProfileKind::Heap {
+                if thread.is_some() || thread_id.is_some() || main_thread {
+                    Err(anyhow::anyhow!(
+                        "heap profiling does not support thread filters; allocation lifetimes cross threads"
+                    ))
+                } else {
+                    heap_command(
+                        Some((binary, args)),
+                        None,
+                        output,
+                        duration,
+                        heap_interval,
+                        publish,
+                        None,
+                    )
+                }
+            } else {
+                run_command(
+                    binary,
+                    args,
+                    freq,
+                    output,
+                    duration,
+                    thread,
+                    thread_id,
+                    main_thread,
+                    publish,
+                )
+            }
+        }
         Command::Attach {
+            profile: kind,
+            heap_interval,
             publish,
             expected_start_time,
             session_id,
@@ -488,18 +657,55 @@ fn main() {
             thread_id,
             main_thread,
             pid,
-        } => attach_command(AttachOptions {
-            pid,
-            freq,
+        } => {
+            if kind == cli::ProfileKind::Heap {
+                if let Some(expected) = expected_start_time {
+                    let actual = pprofessor::list_processes()
+                        .ok()
+                        .and_then(|ps| ps.into_iter().find(|p| p.pid == pid))
+                        .map(|p| p.start_time_micros);
+                    if let Err(e) = validate_process_identity(pid, expected, actual) {
+                        eprintln!("pprofessor: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                if thread.is_some() || thread_id.is_some() || main_thread {
+                    Err(anyhow::anyhow!(
+                        "heap profiling does not support thread filters; allocation lifetimes cross threads"
+                    ))
+                } else {
+                    heap_command(
+                        None,
+                        Some(pid),
+                        output,
+                        duration,
+                        heap_interval,
+                        publish,
+                        session_id,
+                    )
+                }
+            } else {
+                attach_command(AttachOptions {
+                    pid,
+                    freq,
+                    output,
+                    duration,
+                    thread,
+                    thread_id,
+                    main_thread,
+                    publish,
+                    expected_start_time,
+                    requested_session_id: session_id,
+                })
+            }
+        }
+        Command::Compare {
+            base,
+            current,
             output,
-            duration,
-            thread,
-            thread_id,
-            main_thread,
-            publish,
-            expected_start_time,
-            requested_session_id: session_id,
-        }),
+        } => compare_command(&base, &current, &output),
+        Command::Publish { input, name } => publish_command(&input, &name),
+        Command::HeapRecorder { output } => install_heap_recorder(&output),
         Command::Processes { json } => {
             let processes = pprofessor::list_processes();
             match processes {
@@ -524,10 +730,20 @@ fn main() {
             view,
             format,
             sample_type,
+            heap,
             limit,
             min_percent,
             output,
-        } => analyze_command(input, view, format, sample_type, limit, min_percent, output),
+        } => analyze_command(
+            input,
+            view,
+            format,
+            sample_type,
+            heap,
+            limit,
+            min_percent,
+            output,
+        ),
     };
 
     if let Err(e) = result {

@@ -50,8 +50,8 @@ struct ContentView: View {
         }
 #if !APP_STORE
         .sheet(isPresented: $showProcessPicker) {
-            ProcessPickerView { process in
-                do { try coordinator.launchAttach(process: process) }
+            ProcessPickerView { process, heap in
+                do { try coordinator.launchAttach(process: process, heap: heap) }
                 catch { coordinator.lastError = error.localizedDescription }
             }
         }
@@ -115,6 +115,9 @@ struct ContentView: View {
             }
         } else if viewModel.isLoading {
             ProfileEmptyState(isLoading: true, onOpenFile: nil)
+        } else if viewModel.nodes.isEmpty && viewModel.hasProfile {
+            Text("No allocations or samples for the selected metric and filters.")
+                .foregroundStyle(.secondary).padding()
         } else if viewModel.nodes.isEmpty {
             ProfileEmptyState(isLoading: false, onOpenFile: { showFileImporter = true })
         } else {
@@ -156,6 +159,8 @@ struct ContentView: View {
                 ProfileDetailPanel(
                     node: selectedNode,
                     stackTrace: selectedStackTrace,
+                    unit: viewModel.selectedUnit,
+                    valueSign: viewModel.valueSign,
                     onClose: { selectedNodeId = nil }
                 )
                     .frame(minHeight: 140, idealHeight: 300)
