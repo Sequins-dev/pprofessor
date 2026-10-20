@@ -20,6 +20,40 @@ final class ProfileViewModel {
     private(set) var timeline: ProfileTimeline?
     private(set) var timelineSelection: TimelineSelectionState?
 
+    private(set) var availableHeaps: [String] = []
+    private(set) var hasNegativeValues = false
+    private(set) var profileComments: [String] = []
+    var hasProfile: Bool { decodedProfile != nil }
+    var selectedUnit: String {
+        availableValueTypes.indices.contains(selectedValueTypeIndex)
+            ? availableValueTypes[selectedValueTypeIndex].unit : ""
+    }
+    var selectedHeap: String? {
+        didSet {
+            if let profile = decodedProfile {
+                invalidateLivePresentation()
+                recompute(profile: profile)
+            }
+        }
+    }
+    var valueSign: ProfileValueSign = .positive {
+        didSet {
+            if let profile = decodedProfile {
+                invalidateLivePresentation()
+                recompute(profile: profile)
+            }
+        }
+    }
+
+    private func updateHeapMetadata(_ profile: DecodedProfile) {
+        availableHeaps = profile.heapDomains
+        hasNegativeValues = profile.hasNegativeValues
+        profileComments = profile.comments.map { profile.string(at: $0) }
+        if selectedHeap.map({ !availableHeaps.contains($0) }) ?? true {
+            selectedHeap = availableHeaps.first
+        }
+    }
+
     // MARK: - UI state
 
     var searchText: String = ""
@@ -59,15 +93,31 @@ final class ProfileViewModel {
     func loadDecodedProfile(_ profile: DecodedProfile, resetTimelineSelection: Bool = false) {
         error = nil
         isLoading = false
+        let isNewProfile = decodedProfile == nil || resetTimelineSelection
         decodedProfile = profile
+        updateHeapMetadata(profile)
+        if isNewProfile {
+            selectedThread = nil
+            valueSign = .positive
+            zoomedNodeId = nil
+        } else if !profile.hasNegativeValues && valueSign != .positive {
+            valueSign = .positive
+        }
         sourceURL = nil
         availableValueTypes = profile.sampleTypes.map { vt in
             (type: profile.string(at: vt.type), unit: profile.string(at: vt.unit))
         }
-        if !availableValueTypes.indices.contains(selectedValueTypeIndex) {
-            selectedValueTypeIndex = 0
+        if isNewProfile || !availableValueTypes.indices.contains(selectedValueTypeIndex) {
+            selectedValueTypeIndex = profile.preferredValueTypeIndex
         }
-        enqueueLivePresentation(profile: profile, resetSelection: resetTimelineSelection)
+        if profile.isHeapProfile {
+            invalidateLivePresentation()
+            timeline = nil
+            timelineSelection = nil
+            recompute(profile: profile)
+        } else {
+            enqueueLivePresentation(profile: profile, resetSelection: resetTimelineSelection)
+        }
     }
 
     func selectTimeRange(_ range: ClosedRange<Int64>, isDragging: Bool) {
@@ -117,11 +167,13 @@ final class ProfileViewModel {
             }.value
 
             decodedProfile = profile
+            updateHeapMetadata(profile)
+            valueSign = .positive
             sourceURL = url
             availableValueTypes = profile.sampleTypes.map { vt in
                 (type: profile.string(at: vt.type), unit: profile.string(at: vt.unit))
             }
-            selectedValueTypeIndex = 0
+            selectedValueTypeIndex = profile.preferredValueTypeIndex
             selectedThread = nil
             rebuildTimeline(profile: profile, resetSelection: true)
             recompute(profile: profile)
@@ -133,17 +185,14 @@ final class ProfileViewModel {
     }
 
     func saveProfile() {
-        guard let sourceURL else { return }
+        guard let decodedProfile else { return }
         let panel = NSSavePanel()
         panel.title = "Save Profile"
-        panel.nameFieldStringValue = sourceURL.lastPathComponent
+        panel.nameFieldStringValue = "profile.pb"
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let destination = panel.url else { return }
         do {
-            if FileManager.default.fileExists(atPath: destination.path) {
-                try FileManager.default.removeItem(at: destination)
-            }
-            try FileManager.default.copyItem(at: sourceURL, to: destination)
+            try decodedProfile.encoded().write(to: destination, options: .atomic)
         } catch {
             self.error = error.localizedDescription
         }
@@ -210,7 +259,9 @@ final class ProfileViewModel {
             profile,
             valueTypeIndex: selectedValueTypeIndex,
             threadFilter: selectedThread,
-            timeRangeNanos: timelineSelection?.range
+            timeRangeNanos: timelineSelection?.range,
+            valueSign: valueSign,
+            heapDomain: selectedHeap
         )
         apply(result)
     }

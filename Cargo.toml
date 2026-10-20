@@ -35,3 +35,6 @@ symbolic-demangle = "12"
 [dev-dependencies]
 flate2 = "1"
 libc = "0.2"
+
+[build-dependencies]
+cc = "1"

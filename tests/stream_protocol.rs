@@ -113,3 +113,55 @@ fn default_publisher_address_is_ipv4_loopback() {
         SocketAddr::from((Ipv4Addr::LOCALHOST, 57557))
     );
 }
+
+#[test]
+fn runtime_heap_publisher_uses_replacement_checkpoints_with_complete_pprof() {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let reader = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut payload = Vec::new();
+        let mut kinds = Vec::new();
+        for _ in 0..3 {
+            let mut header = [0; STREAM_HEADER_LEN];
+            stream.read_exact(&mut header).unwrap();
+            let h = StreamHeader::decode(&header).unwrap();
+            payload.resize(h.payload_len as usize, 0);
+            stream.read_exact(&mut payload).unwrap();
+            kinds.push(h.kind);
+        }
+        (kinds, pprofessor::PprofProfile::decode(&payload).unwrap())
+    });
+    let mut heap = pprofessor::heap::HeapProfile::new("arena");
+    heap.add_sample(
+        vec![pprofessor::heap::HeapFrame {
+            function: "arena.allocate".into(),
+            ..Default::default()
+        }],
+        pprofessor::heap::HeapValues {
+            alloc_space: 128,
+            alloc_objects: 2,
+            inuse_space: 64,
+            inuse_objects: 1,
+        },
+    )
+    .unwrap();
+    let mut publisher =
+        SessionPublisher::new(address, SessionHello::new("runtime", "run", 42, "arena", 0));
+    publisher
+        .publish_heap_checkpoint(&heap.to_pprof().unwrap())
+        .unwrap();
+    publisher
+        .publish_heap_checkpoint(&heap.to_pprof().unwrap())
+        .unwrap();
+    let (kinds, profile) = reader.join().unwrap();
+    assert_eq!(
+        kinds,
+        vec![
+            FrameKind::Hello,
+            FrameKind::ProfileCheckpoint,
+            FrameKind::ProfileCheckpoint
+        ]
+    );
+    assert_eq!(profile.samples[0].values, vec![2, 128, 1, 64]);
+}

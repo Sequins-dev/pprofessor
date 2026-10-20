@@ -21,8 +21,11 @@ public func convertProfile(
     _ profile: DecodedProfile,
     valueTypeIndex: Int = 0,
     threadFilter: String? = nil,
-    timeRangeNanos: ClosedRange<Int64>? = nil
+    timeRangeNanos: ClosedRange<Int64>? = nil,
+    valueSign: ProfileValueSign = .positive,
+    heapDomain: String? = nil
 ) -> ProfileConversionResult {
+    let selectedHeap = heapDomain ?? (profile.heapDomains.count > 1 ? profile.heapDomains.first : nil)
     // Build value type names for the UI selector
     let valueTypeNames: [(type: String, unit: String)] = profile.sampleTypes.map { vt in
         (type: profile.string(at: vt.type), unit: profile.string(at: vt.unit))
@@ -90,9 +93,11 @@ public func convertProfile(
     )
 
     for sample in profile.samples {
-        guard valueTypeIndex < sample.values.count else { continue }
-        let value = sample.values[valueTypeIndex]
-        guard value > 0 else { continue }
+        guard valueTypeIndex >= 0, valueTypeIndex < sample.values.count else { continue }
+        let rawValue = sample.values[valueTypeIndex]
+        guard valueSign == .negative ? rawValue < 0 : rawValue > 0 else { continue }
+        let value = rawValue == Int64.min ? Int64.max : abs(rawValue)
+        if let selectedHeap, profile.heapDomain(for: sample) != selectedHeap { continue }
 
         // Apply thread filter
         if let filter = threadFilter {

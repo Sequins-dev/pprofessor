@@ -437,6 +437,8 @@ pub struct PprofProfile {
     pub keep_frames: u64,
     pub comments: Vec<u64>,
     pub default_sample_type: u64,
+    #[serde(default)]
+    pub doc_url: u64,
 }
 
 /// Compatibility name for the original write-only pprof model.
@@ -466,6 +468,7 @@ impl PprofProfile {
             keep_frames: 0,
             comments: Vec::new(),
             default_sample_type: 0,
+            doc_url: 0,
         }
     }
 
@@ -540,6 +543,7 @@ impl PprofProfile {
 
         // field 14: default sample type
         encode_varint_field(&mut buf, 14, self.default_sample_type);
+        encode_varint_field(&mut buf, 15, self.doc_url);
 
         buf
     }
@@ -578,6 +582,7 @@ impl PprofProfile {
                 }
                 (13, FieldValue::Varint(value)) => profile.comments.push(value),
                 (14, FieldValue::Varint(value)) => profile.default_sample_type = value,
+                (15, FieldValue::Varint(value)) => profile.doc_url = value,
                 _ => {}
             }
         }

@@ -142,6 +142,16 @@ impl SessionPublisher {
         }
     }
 
+    /// Publish a complete runtime/native heap checkpoint. Only metrics actually
+    /// supplied by the runtime are required; missing metrics are not invented.
+    pub fn publish_heap_checkpoint(
+        &mut self,
+        profile: &crate::PprofProfile,
+    ) -> anyhow::Result<bool> {
+        crate::heap::validate_profile(profile)?;
+        Ok(self.send(FrameKind::ProfileCheckpoint, &profile.encode())?)
+    }
+
     pub fn default_address() -> SocketAddr {
         SocketAddr::from((Ipv4Addr::LOCALHOST, DEFAULT_SESSION_PORT))
     }

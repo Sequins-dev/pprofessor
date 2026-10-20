@@ -6,6 +6,7 @@ public enum ProfileSessionSource: String, Codable, Sendable {
     case cliAttach
     case cliRun
     case imported
+    case runtime
 }
 
 public enum ProfileSessionStatus: String, Codable, Sendable {

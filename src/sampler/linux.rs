@@ -707,7 +707,7 @@ fn thread_name(pid: u32, tid: u32) -> String {
         .unwrap_or_default()
 }
 
-fn parse_loaded_images(maps: &str) -> Vec<LoadedImage> {
+pub(crate) fn parse_loaded_images(maps: &str) -> Vec<LoadedImage> {
     let mut images = BTreeSet::new();
     for line in maps.lines() {
         let mut fields = line.split_whitespace();
@@ -718,6 +718,12 @@ fn parse_loaded_images(maps: &str) -> Vec<LoadedImage> {
         let Some(offset) = fields.next().and_then(parse_hex) else {
             continue;
         };
+        // ELF file-offset-zero mappings identify actual loaded images. RELRO
+        // can map another copy of a file page at a shifted virtual address;
+        // subtracting that page's file offset invents a base inside .text.
+        if offset != 0 {
+            continue;
+        }
         let _device = fields.next();
         let _inode = fields.next();
         let path = fields.collect::<Vec<_>>().join(" ");
@@ -744,7 +750,7 @@ fn parse_hex(value: &str) -> Option<u64> {
     u64::from_str_radix(value, 16).ok()
 }
 
-fn unescape_proc_path(path: &str) -> String {
+pub(crate) fn unescape_proc_path(path: &str) -> String {
     let bytes = path.as_bytes();
     let mut output = Vec::with_capacity(bytes.len());
     let mut index = 0;
@@ -836,6 +842,17 @@ mod tests {
                     path: "/usr/lib/libc.so.6".to_string(),
                 },
             ]
+        );
+    }
+    #[test]
+    fn relro_remapping_does_not_create_a_second_image_inside_text() {
+        let maps = "55555000-55556000 r--p 00000000 08:01 1 /tmp/app\n55556000-55557000 r-xp 00001000 08:01 1 /tmp/app\n55557000-55558000 r--p 00002000 08:01 1 /tmp/app\n55558000-55559000 r--p 00002000 08:01 1 /tmp/app\n55559000-5555a000 rw-p 00003000 08:01 1 /tmp/app\n";
+        assert_eq!(
+            parse_loaded_images(maps),
+            vec![LoadedImage {
+                load_address: 0x55555000,
+                path: "/tmp/app".into()
+            }]
         );
     }
 }

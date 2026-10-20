@@ -4,6 +4,8 @@ import PProfessorKit
 struct ProfileDetailPanel: View {
     let node: FlamegraphNode
     let stackTrace: [FlamegraphNode]
+    let unit: String
+    var valueSign: ProfileValueSign = .positive
     let onClose: () -> Void
 
     var body: some View {
@@ -27,7 +29,7 @@ struct ProfileDetailPanel: View {
                 HStack(spacing: 16) {
                     Label(
                         "Self: \(formatValue(node.selfValue)) (\(String(format: "%.1f%%", node.selfPercentage)))",
-                        systemImage: "clock"
+                        systemImage: unit == "bytes" ? "memorychip" : "chart.bar"
                     )
                     Label(
                         "Total: \(formatValue(node.totalValue)) (\(String(format: "%.1f%%", node.totalPercentage)))",
@@ -73,11 +75,6 @@ struct ProfileDetailPanel: View {
     }
 
     private func formatValue(_ value: Int64) -> String {
-        // Format as seconds if large (nanoseconds), otherwise raw count
-        if value > 1_000_000 {
-            let seconds = Double(value) / 1_000_000_000
-            return String(format: "%.2fs", seconds)
-        }
-        return "\(value)"
+        formatProfileValue(valueSign == .negative ? -value : value, unit: unit)
     }
 }

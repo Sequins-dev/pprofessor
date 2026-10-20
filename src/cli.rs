@@ -25,11 +25,17 @@ pub enum AnalyzeFormat {
     Markdown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ProfileKind {
+    Stack,
+    Heap,
+}
+
 #[derive(Parser)]
 #[command(
     name = "pprofessor",
     about = "Native process profiler with pprof output",
-    long_about = "Samples CPU usage of a process and writes a gzip-compressed pprof profile.\n\n\
+    long_about = "Captures stack samples or native heap allocations and writes a gzip-compressed pprof profile.\n\n\
                   Profiling a child process spawned via 'run' normally requires no special permissions.\n\
                   The 'attach' subcommand is subject to the host operating system's debugger access policy."
 )]
@@ -42,11 +48,19 @@ pub struct Cli {
 pub enum Command {
     /// Spawn a child process and profile it until it exits (or is interrupted)
     Run {
+        /// Capture periodic stacks or native heap allocation history
+        #[arg(long, value_enum, default_value_t = ProfileKind::Stack)]
+        profile: ProfileKind,
+
+        /// Heap checkpoint interval in milliseconds (independent of stack frequency)
+        #[arg(long, default_value_t = 2000, value_parser = clap::value_parser!(u64).range(1..))]
+        heap_interval: u64,
+
         /// Do not publish this session to a running PProfessor app
         #[arg(long = "no-publish", action = clap::ArgAction::SetFalse, default_value_t = true)]
         publish: bool,
 
-        /// Sampling frequency in Hz
+        /// Stack sampling frequency in Hz
         #[arg(long, default_value_t = 99, value_parser = clap::value_parser!(u32).range(1..=1000))]
         freq: u32,
 
@@ -80,6 +94,14 @@ pub enum Command {
 
     /// Attach to a running process by PID and profile until interrupted
     Attach {
+        /// Capture periodic stacks or native heap allocation history
+        #[arg(long, value_enum, default_value_t = ProfileKind::Stack)]
+        profile: ProfileKind,
+
+        /// Heap checkpoint interval in milliseconds (independent of stack frequency)
+        #[arg(long, default_value_t = 2000, value_parser = clap::value_parser!(u64).range(1..))]
+        heap_interval: u64,
+
         /// Do not publish this session to a running PProfessor app
         #[arg(long = "no-publish", action = clap::ArgAction::SetFalse, default_value_t = true)]
         publish: bool,
@@ -92,7 +114,7 @@ pub enum Command {
         #[arg(long)]
         session_id: Option<String>,
 
-        /// Sampling frequency in Hz
+        /// Stack sampling frequency in Hz
         #[arg(long, default_value_t = 99, value_parser = clap::value_parser!(u32).range(1..=1000))]
         freq: u32,
 
@@ -127,6 +149,25 @@ pub enum Command {
         json: bool,
     },
 
+    /// Export current minus base as a signed heap pprof profile
+    Compare {
+        base: PathBuf,
+        current: PathBuf,
+        #[arg(long, short, default_value = "difference.pb.gz")]
+        output: PathBuf,
+    },
+    /// Publish a runtime-provided heap pprof file to the local app
+    Publish {
+        input: PathBuf,
+        #[arg(long, default_value = "Runtime heap")]
+        name: String,
+    },
+    /// Install the native allocation recorder for instrumented Linux attachment
+    HeapRecorder {
+        #[arg(long, short)]
+        output: PathBuf,
+    },
+
     /// Analyze hotspots in a pprof file
     #[command(alias = "report")]
     Analyze {
@@ -144,6 +185,10 @@ pub enum Command {
         /// Sample type name or zero-based index (defaults like go tool pprof)
         #[arg(long)]
         sample_type: Option<String>,
+
+        /// Select one heap domain when a profile contains overlapping heaps
+        #[arg(long)]
+        heap: Option<String>,
 
         /// Maximum number of rows, stacks, or tree nodes
         #[arg(long, default_value_t = 10, value_parser = parse_positive_usize)]
