@@ -130,7 +130,15 @@ __attribute__((constructor)) static void begin(void) {
           previous[0] == 0x3130504145485050ULL &&
           previous[2] == (uint64_t)owner) {
         uint64_t replaced = 3;
-        (void)pwrite(existing, &replaced, sizeof(replaced), 24);
+        ssize_t written;
+        do {
+          written = pwrite(existing, &replaced, sizeof(replaced), 24);
+        } while (written < 0 && errno == EINTR);
+        if (written != (ssize_t)sizeof(replaced)) {
+          const char message[] =
+              "pprofessor: could not mark heap history replaced by exec\n";
+          write_all(STDERR_FILENO, message, sizeof(message) - 1);
+        }
       }
       close(existing);
     }

@@ -153,6 +153,10 @@ impl LogReader {
             u64::from_le_bytes(status) != 1,
             "native heap recorder lost events due to an I/O failure"
         );
+        ensure!(
+            matches!(u64::from_le_bytes(status), 0 | 2),
+            "invalid native heap recorder status"
+        );
         self.file.seek(SeekFrom::Start(offset))?;
         const RECORD: usize = 69 * 8;
         let available = self.file.metadata()?.len().saturating_sub(offset);
@@ -169,14 +173,13 @@ impl LogReader {
             let size = word(&event, 24);
             let depth = word(&event, 32);
             ensure!(depth <= 64, "corrupt allocation stack depth");
-            if kind == 2 || (kind == 3 && old != 0) {
-                if self
+            if (kind == 2 || (kind == 3 && old != 0))
+                && self
                     .tracker
                     .release(if kind == 2 { address } else { old })
                     .is_err()
-                {
-                    self.initial_frees += 1;
-                }
+            {
+                self.initial_frees += 1;
             }
             if (kind == 1 || kind == 3) && address != 0 {
                 let stack = (0..depth as usize)
